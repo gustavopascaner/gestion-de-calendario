@@ -1,0 +1,332 @@
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { DateTime } from 'luxon';
+import config from '../config.js';
+import db from './db.js';
+import { generateSlots } from './availability.js';
+import { sign, verify } from './tokens.js';
+import * as google from './google.js';
+import { notify } from './mail.js';
+
+const PORT = Number(process.env.PORT || 3000);
+const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+const EMBED = (process.env.EMBED_ORIGINS ?? '*').trim();
+const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
+const TOKEN_TTL = 90 * 24 * 3_600_000;
+
+sign({ act: 'check', exp: 0 }); // falla al arrancar si falta SIGNING_SECRET
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+// ---------- disponibilidad ----------
+
+let busyCache = null; // evita llamar a Google en cada visita; las reservas siempre consultan en fresco
+const horizonEnd = (now) => now + (config.horizonDays + 1) * 86_400_000;
+
+async function googleBusy(now, { fresh }) {
+  if (!google.isConnected()) return [];
+  if (!fresh && busyCache && Date.now() - busyCache.at < 60_000) return busyCache.data;
+  const data = await google.getBusy(now - 86_400_000, horizonEnd(now));
+  busyCache = { at: Date.now(), data };
+  return data;
+}
+
+function dbBlocked(now, excludeId = '') {
+  return db
+    .prepare("SELECT start_utc AS start, end_utc AS end FROM bookings WHERE status = 'confirmed' AND end_utc > ? AND id != ?")
+    .all(now - 86_400_000, excludeId)
+    .map((r) => ({ start: r.start, end: r.end }));
+}
+
+// Nota: en una reprogramación el evento viejo sigue ocupado en Google, así que su propio horario
+// no se ofrece como destino (no tiene sentido moverlo a donde ya está).
+async function availableSlots({ fresh = false, excludeId = '' } = {}) {
+  const now = Date.now();
+  let busy = [];
+  try {
+    busy = await googleBusy(now, { fresh });
+  } catch (err) {
+    if (fresh) throw new HttpError(503, 'No pude consultar el calendario. Probá de nuevo en un momento.');
+    console.error('[google] freeBusy falló, mostrando solo reservas locales:', err.message);
+  }
+  return generateSlots(config, now, [...dbBlocked(now, excludeId), ...busy]);
+}
+
+// ---------- helpers HTTP ----------
+
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
+
+function setSecurityHeaders(res) {
+  const ancestors = EMBED === '*' ? '*' : ["'self'", ...EMBED.split(/[\s,]+/).filter(Boolean)].join(' ');
+  res.setHeader(
+    'Content-Security-Policy',
+    `default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors ${ancestors}`,
+  );
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+}
+
+function sendJson(res, status, data) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(data));
+}
+
+function sendHtml(res, status, html) {
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(html);
+}
+
+function serveFile(res, file) {
+  const full = path.resolve(PUBLIC_DIR, file);
+  if (!full.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(full) || !fs.statSync(full).isFile()) {
+    throw new HttpError(404, 'No encontrado');
+  }
+  res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' });
+  fs.createReadStream(full).pipe(res);
+}
+
+async function readJson(req) {
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 20_000) throw new HttpError(413, 'Solicitud demasiado grande');
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString() || '{}');
+  } catch {
+    throw new HttpError(400, 'JSON inválido');
+  }
+}
+
+const hits = new Map();
+function rateLimit(req) {
+  const ip = (process.env.TRUST_PROXY === '1' && req.headers['x-forwarded-for']?.split(',')[0].trim()) || req.socket.remoteAddress;
+  const now = Date.now();
+  const recent = (hits.get(ip) ?? []).filter((t) => now - t < 3_600_000);
+  if (recent.length >= 10) throw new HttpError(429, 'Demasiados intentos. Probá más tarde.');
+  recent.push(now);
+  hits.set(ip, recent);
+}
+
+// ---------- reservas ----------
+
+const manageToken = (id) => sign({ act: 'manage', id, exp: Date.now() + TOKEN_TTL });
+const manageUrl = (token) => `${BASE_URL}/manage?t=${token}`;
+const getBooking = (id) => db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+
+function bookingFromToken(token) {
+  const payload = verify(token, 'manage');
+  const booking = payload && getBooking(payload.id);
+  if (!booking) throw new HttpError(404, 'El link no es válido o venció.');
+  return booking;
+}
+
+const view = (b) => ({
+  id: b.id,
+  name: b.name,
+  email: b.email,
+  note: b.note,
+  tz: b.tz,
+  start: b.start_utc,
+  end: b.end_utc,
+  status: b.status,
+  meetUrl: b.meet_url,
+  title: config.title,
+  ownerName: config.ownerName,
+});
+
+const isTz = (tz) => typeof tz === 'string' && DateTime.now().setZone(tz).isValid;
+
+function parseStart(value) {
+  const ms = typeof value === 'number' ? value : Date.parse(value);
+  if (!Number.isFinite(ms)) throw new HttpError(400, 'Horario inválido');
+  return ms;
+}
+
+async function createBooking(body) {
+  const name = String(body.name ?? '').trim();
+  const email = String(body.email ?? '').trim();
+  const note = String(body.note ?? '').trim();
+  if (!name || name.length > 100) throw new HttpError(400, 'Ingresá tu nombre (máx. 100 caracteres).');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) throw new HttpError(400, 'Ingresá un email válido.');
+  if (note.length > 1000) throw new HttpError(400, 'La nota es demasiado larga (máx. 1000).');
+  const tz = isTz(body.tz) ? body.tz : config.timezone;
+  const start = parseStart(body.start);
+
+  const slots = await availableSlots({ fresh: true });
+  if (!slots.includes(start)) throw new HttpError(409, 'Ese horario ya no está disponible. Elegí otro.');
+
+  // Sin awaits entre la verificación y el INSERT: en un solo proceso esto es atómico.
+  const id = crypto.randomBytes(9).toString('base64url');
+  const end = start + config.slotMinutes * 60_000;
+  try {
+    db.prepare('INSERT INTO bookings (id, start_utc, end_utc, name, email, note, tz, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      id, start, end, name, email, note, tz, Date.now(),
+    );
+  } catch (err) {
+    if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'Ese horario ya no está disponible. Elegí otro.');
+    throw err;
+  }
+
+  let booking = getBooking(id);
+  if (google.isConnected()) {
+    try {
+      const ev = await google.createEvent({ booking, title: config.title, ownerTz: config.timezone });
+      db.prepare('UPDATE bookings SET google_event_id = ?, meet_url = ? WHERE id = ?').run(ev.id, ev.meetUrl, id);
+      booking = getBooking(id);
+    } catch (err) {
+      db.prepare('DELETE FROM bookings WHERE id = ?').run(id);
+      console.error('[google] no se pudo crear el evento:', err.message);
+      throw new HttpError(502, 'No pude crear el evento en el calendario. Probá de nuevo.');
+    }
+  }
+  busyCache = null;
+
+  const token = manageToken(id);
+  await notify('confirmed', booking, { manageUrl: manageUrl(token) });
+  return { token };
+}
+
+async function cancelBooking(token) {
+  const booking = bookingFromToken(token);
+  if (booking.status !== 'confirmed') throw new HttpError(409, 'Esta reserva ya fue cancelada.');
+  if (booking.start_utc <= Date.now()) throw new HttpError(409, 'La reunión ya comenzó.');
+  db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(booking.id);
+  busyCache = null;
+  if (booking.google_event_id) {
+    try {
+      await google.deleteEvent(booking.google_event_id);
+    } catch (err) {
+      console.error('[google] no se pudo borrar el evento:', err.message);
+    }
+  }
+  await notify('cancelled', getBooking(booking.id), { manageUrl: manageUrl(token) });
+}
+
+async function rescheduleBooking(token, startValue) {
+  const booking = bookingFromToken(token);
+  if (booking.status !== 'confirmed') throw new HttpError(409, 'Esta reserva está cancelada.');
+  if (booking.start_utc <= Date.now()) throw new HttpError(409, 'La reunión ya comenzó.');
+  const start = parseStart(startValue);
+
+  const slots = await availableSlots({ fresh: true, excludeId: booking.id });
+  if (!slots.includes(start)) throw new HttpError(409, 'Ese horario ya no está disponible. Elegí otro.');
+
+  const end = start + config.slotMinutes * 60_000;
+  const update = db.prepare('UPDATE bookings SET start_utc = ?, end_utc = ? WHERE id = ?');
+  try {
+    update.run(start, end, booking.id);
+  } catch (err) {
+    if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'Ese horario ya no está disponible. Elegí otro.');
+    throw err;
+  }
+  if (booking.google_event_id) {
+    try {
+      await google.moveEvent(booking.google_event_id, start, end, config.timezone);
+    } catch (err) {
+      update.run(booking.start_utc, booking.end_utc, booking.id);
+      console.error('[google] no se pudo mover el evento:', err.message);
+      throw new HttpError(502, 'No pude actualizar el calendario. Probá de nuevo.');
+    }
+  }
+  busyCache = null;
+  await notify('rescheduled', getBooking(booking.id), { manageUrl: manageUrl(token) });
+}
+
+// ---------- rutas ----------
+
+async function handleApi(req, res, url) {
+  const route = `${req.method} ${url.pathname}`;
+  switch (route) {
+    case 'GET /api/slots':
+      return sendJson(res, 200, {
+        slots: await availableSlots(),
+        timezone: config.timezone,
+        slotMinutes: config.slotMinutes,
+        title: config.title,
+        ownerName: config.ownerName,
+      });
+    case 'POST /api/book':
+      rateLimit(req);
+      return sendJson(res, 201, await createBooking(await readJson(req)));
+    case 'GET /api/booking':
+      return sendJson(res, 200, view(bookingFromToken(url.searchParams.get('t'))));
+    case 'POST /api/cancel':
+      rateLimit(req);
+      await cancelBooking((await readJson(req)).t);
+      return sendJson(res, 200, { ok: true });
+    case 'POST /api/reschedule': {
+      rateLimit(req);
+      const body = await readJson(req);
+      await rescheduleBooking(body.t, body.start);
+      return sendJson(res, 200, { ok: true });
+    }
+    default:
+      throw new HttpError(404, 'No encontrado');
+  }
+}
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+async function handleAdmin(req, res, url) {
+  if (!process.env.ADMIN_SECRET || !google.isConfigured()) throw new HttpError(404, 'No encontrado');
+  if (url.pathname === '/admin/google/connect') {
+    if (!safeEqual(url.searchParams.get('key') ?? '', process.env.ADMIN_SECRET)) throw new HttpError(403, 'Clave incorrecta');
+    const state = sign({ act: 'oauth', exp: Date.now() + 10 * 60_000 });
+    res.writeHead(302, { Location: google.authUrl(state) });
+    return res.end();
+  }
+  if (url.pathname === '/admin/google/callback') {
+    if (!verify(url.searchParams.get('state'), 'oauth')) throw new HttpError(400, 'Estado OAuth inválido o vencido. Empezá de nuevo desde /admin/google/connect.');
+    if (url.searchParams.get('error')) throw new HttpError(400, `Google rechazó el acceso: ${url.searchParams.get('error')}`);
+    await google.exchangeCode(url.searchParams.get('code') ?? '');
+    busyCache = null;
+    return sendHtml(res, 200, '<!doctype html><meta charset="utf-8"><title>Conectado</title><h1>Google Calendar conectado ✅</h1><p>Ya podés cerrar esta pestaña.</p>');
+  }
+  throw new HttpError(404, 'No encontrado');
+}
+
+const PAGES = { '/book': 'book.html', '/confirm': 'manage.html', '/manage': 'manage.html', '/embed-example': 'embed-example.html' };
+
+const server = http.createServer(async (req, res) => {
+  setSecurityHeaders(res);
+  try {
+    const url = new URL(req.url, BASE_URL);
+    if (url.pathname === '/') {
+      res.writeHead(302, { Location: '/book' });
+      return res.end();
+    }
+    if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
+    if (url.pathname.startsWith('/admin/google/')) return await handleAdmin(req, res, url);
+    if (req.method === 'GET' && PAGES[url.pathname]) return serveFile(res, PAGES[url.pathname]);
+    if (req.method === 'GET' && url.pathname.startsWith('/assets/')) return serveFile(res, decodeURIComponent(url.pathname.slice(1)));
+    throw new HttpError(404, 'No encontrado');
+  } catch (err) {
+    const status = err.status ?? 500;
+    if (status >= 500 && !(err instanceof HttpError)) console.error(err);
+    const message = err instanceof HttpError ? err.message : 'Error interno';
+    if (res.headersSent) return res.end();
+    if (new URL(req.url, BASE_URL).pathname.startsWith('/api/')) sendJson(res, status, { error: message });
+    else sendHtml(res, status, `<!doctype html><meta charset="utf-8"><title>${status}</title><p>${message.replace(/[<>&]/g, '')}</p>`);
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`Reservas en ${BASE_URL}/book`);
+  console.log(`Google Calendar: ${google.isConnected() ? 'conectado' : google.isConfigured() ? 'configurado, falta conectar (/admin/google/connect?key=…)' : 'sin configurar (solo SQLite)'}`);
+  console.log(`SMTP: ${process.env.SMTP_HOST ? process.env.SMTP_HOST : 'sin configurar (los mails solo se registran en consola)'}`);
+});
