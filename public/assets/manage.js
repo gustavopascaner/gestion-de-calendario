@@ -63,10 +63,11 @@ function confirmCancel(button, message) {
   };
 }
 
-async function reschedule() {
+async function reschedule(b) {
   const box = $('#resched');
   box.replaceChildren(el('h2', {}, 'Elegí un nuevo horario'), el('div', { id: 'picker' }), el('div', { id: 'confirm-new' }));
   await mountPicker($('#picker', box), {
+    slug: b.slug,
     onSelect: (ms, tz) => {
       const error = el('p', { class: 'error', role: 'alert' });
       const button = el('button', { type: 'button', class: 'primary' }, 'Confirmar nuevo horario');
@@ -78,7 +79,7 @@ async function reschedule() {
         } catch (err) {
           error.textContent = err.message;
           button.disabled = false;
-          if (err.status === 409) reschedule();
+          if (err.status === 409) reschedule(b);
         }
       };
       $('#confirm-new', box).replaceChildren(el('p', { class: 'summary' }, `${fmtLong(ms, tz)} (${tz.replaceAll('_', ' ')})`), error, button);

@@ -30,14 +30,18 @@ npm test
 
 Definí `ADMIN_SECRET` en `.env` y entrá a `http://localhost:3000/admin` con esa contraseña. Desde ahí, sin tocar código:
 
-- **Evento:** tu nombre, título, descripción, ubicación, duración, descanso entre reuniones, antelación mínima, días hacia adelante y zona horaria.
-- **Horarios:** días y tramos horarios de cada día de la semana (varios tramos por día).
-- **Formulario:** preguntas adicionales además de nombre y email — texto corto, texto largo, teléfono, lista desplegable o casilla (p. ej. aceptar términos). Obligatorias u opcionales, con texto de ayuda y reordenables.
-- **Apariencia:** color principal, mensaje que se muestra al confirmar y, opcionalmente, redirigir a tu propia página de «gracias» (si el sitio está embebido en un iframe, se redirige la ventana completa).
-- **Reservas:** próximas reservas con las respuestas del formulario, y botón para cancelar (avisa al visitante).
+- **Eventos (ABM):** creá, editá, duplicá, ordená, activá/desactivá y eliminá tipos de evento (p. ej. «Llamada de 15 min», «Mentoría de 60 min»). Cada uno tiene su propio link `/book/<slug>`, y botones para copiar el link o el código del `<iframe>`. Un evento con reservas no se puede borrar: desactivalo para ocultarlo. Al editar un evento:
+  - **Detalles:** título, link, activo, descripción, ubicación, duración, descanso entre reuniones, antelación mínima y días hacia adelante.
+  - **Horarios:** días y tramos horarios propios de ese evento (varios tramos por día).
+  - **Formulario:** preguntas adicionales además de nombre y email — texto corto, texto largo, teléfono, lista desplegable o casilla (p. ej. aceptar términos). Obligatorias u opcionales, con texto de ayuda y reordenables.
+  - **Apariencia:** color principal, mensaje que se muestra al confirmar y, opcionalmente, redirigir a tu propia página de «gracias» (si el sitio está embebido en un iframe, se redirige la ventana completa).
+- **Reservas:** próximas reservas (con el evento y las respuestas del formulario) y botón para cancelar (avisa al visitante).
+- **General:** tu nombre y tu zona horaria, compartidos por todos los eventos.
 - **Integraciones:** estado de Google Calendar (con botón para conectar) y SMTP.
 
-Los cambios se aplican al instante. Se guardan en SQLite; [config.js](config.js) solo aporta los **valores iniciales** la primera vez (después manda lo guardado en el panel). Las respuestas viajan en los emails que te llegan y en la descripción del evento de Google.
+`/book` muestra la lista de tus eventos activos (si hay uno solo, abre ese directamente) y `/book/<slug>` abre uno puntual. **Todos los eventos comparten tu agenda**: si te reservan uno, los horarios que se pisan se bloquean en los demás.
+
+Los cambios se aplican al instante. Se guardan en SQLite; [config.js](config.js) solo aporta los **valores iniciales** la primera vez (después manda lo guardado en el panel). Si venías de la versión de un solo evento, tus ajustes y reservas se migran solos al primer evento. Las respuestas viajan en los emails que te llegan y en la descripción del evento de Google.
 
 El buffer separa reuniones: con una reunión de 10:00 a 10:30 y 15 min de descanso, el siguiente horario ofrecido es 11:00.
 
@@ -70,12 +74,13 @@ Notas:
 ## Embeber en una landing
 
 ```html
-<iframe id="booking" src="https://reservas.tudominio.com/book" title="Reservar una reunión"
+<iframe id="booking" src="https://reservas.tudominio.com/book/reunion" title="Reservar una reunión"
         style="width:100%;height:560px;border:0"></iframe>
 <script src="https://reservas.tudominio.com/assets/embed.js"></script> <!-- opcional: ajusta la altura -->
 ```
 
 - Por defecto cualquier sitio puede embeberla. Para restringirlo: `EMBED_ORIGINS=https://tulanding.com`.
+- Podés embeber un evento puntual (`/book/<slug>`) o la lista completa (`/book`). El panel genera el código con el botón **Copiar iframe**.
 - Hay un ejemplo en `/embed-example`.
 - Tras reservar, el visitante ve la confirmación dentro del mismo iframe.
 

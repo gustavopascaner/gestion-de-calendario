@@ -9,14 +9,17 @@ const DAY_NAMES = { mon: 'Lunes', tue: 'Martes', wed: 'Miércoles', thu: 'Jueves
 const FIELD_TYPES = ['text', 'textarea', 'tel', 'select', 'checkbox'];
 const RESERVED_IDS = ['name', 'email', 'tz', 'start', 't'];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 // Valores iniciales: salen de config.js. Lo que se guarda desde /admin tiene prioridad.
-export const DEFAULTS = {
-  ownerName: config.ownerName,
+export const DEFAULT_GLOBAL = { ownerName: config.ownerName, timezone: config.timezone };
+
+export const DEFAULT_EVENT = {
+  slug: 'reunion',
+  active: true,
   title: config.title,
   description: '',
   location: 'Google Meet',
-  timezone: config.timezone,
   slotMinutes: config.slotMinutes,
   bufferMinutes: config.bufferMinutes,
   minNoticeHours: config.minNoticeHours,
@@ -27,6 +30,9 @@ export const DEFAULTS = {
   redirectUrl: '',
   fields: [{ id: 'note', label: 'Nota (opcional)', type: 'textarea', required: false, options: [], placeholder: '¿De qué querés hablar?' }],
 };
+
+export const slugify = (s) =>
+  String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '') || 'evento';
 
 const text = (value, max, label, min = 0) => {
   const s = String(value ?? '').trim();
@@ -83,10 +89,42 @@ function validateFields(input) {
   });
 }
 
-export function validateSettings(input) {
+const checkTz = (tz) => {
+  if (!DateTime.now().setZone(String(tz)).isValid) throw new SettingsError('Zona horaria inválida.');
+  return String(tz);
+};
+
+// ---------- ajustes generales (compartidos por todos los eventos) ----------
+
+export function validateGlobal(input) {
   if (!input || typeof input !== 'object') throw new SettingsError('Datos inválidos.');
-  if (!DateTime.now().setZone(String(input.timezone)).isValid) throw new SettingsError('Zona horaria inválida.');
+  return { ownerName: text(input.ownerName, 100, 'Tu nombre', 1), timezone: checkTz(input.timezone) };
+}
+
+let globalCache = null;
+
+export function getGlobal() {
+  globalCache ??= { ...DEFAULT_GLOBAL, ...JSON.parse(getKv('global') || '{}') };
+  return globalCache;
+}
+
+export function saveGlobal(input) {
+  const clean = validateGlobal(input);
+  setKv('global', JSON.stringify(clean));
+  globalCache = clean;
+  return clean;
+}
+
+// ---------- tipos de evento ----------
+
+export function validateEvent(input) {
+  if (!input || typeof input !== 'object') throw new SettingsError('Datos inválidos.');
   if (!/^#[0-9a-fA-F]{6}$/.test(input.accentColor ?? '')) throw new SettingsError('El color tiene que ser un hexadecimal como #2563eb.');
+
+  const slug = String(input.slug ?? '').trim().toLowerCase();
+  if (slug && (slug.length > 40 || !SLUG.test(slug))) {
+    throw new SettingsError('El link solo admite letras minúsculas, números y guiones (p. ej. llamada-30).');
+  }
 
   let redirectUrl = text(input.redirectUrl, 500, 'URL de redirección');
   if (redirectUrl) {
@@ -101,11 +139,11 @@ export function validateSettings(input) {
   }
 
   return {
-    ownerName: text(input.ownerName, 100, 'Tu nombre', 1),
+    slug,
+    active: input.active !== false,
     title: text(input.title, 100, 'Título', 1),
     description: text(input.description, 1000, 'Descripción'),
     location: text(input.location, 100, 'Ubicación'),
-    timezone: String(input.timezone),
     slotMinutes: int(input.slotMinutes, 5, 480, 'Duración'),
     bufferMinutes: int(input.bufferMinutes, 0, 240, 'Descanso entre reuniones'),
     minNoticeHours: int(input.minNoticeHours, 0, 720, 'Antelación mínima'),
@@ -116,21 +154,4 @@ export function validateSettings(input) {
     redirectUrl,
     fields: validateFields(input.fields ?? []),
   };
-}
-
-let cache = null;
-
-export function getSettings() {
-  if (!cache) {
-    const raw = getKv('settings');
-    cache = raw ? { ...DEFAULTS, ...JSON.parse(raw) } : structuredClone(DEFAULTS);
-  }
-  return cache;
-}
-
-export function saveSettings(input) {
-  const clean = validateSettings(input);
-  setKv('settings', JSON.stringify(clean));
-  cache = clean;
-  return clean;
 }

@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import { DateTime } from 'luxon';
-import { getSettings } from './settings.js';
+import { getGlobal } from './settings.js';
 
 let transport;
 function getTransport() {
@@ -57,7 +57,7 @@ const plain = (heading, rows, links) =>
  * Manda un mail al visitante (en su zona horaria) y otro al dueño.
  */
 export async function notify(kind, booking, { manageUrl }) {
-  const settings = getSettings();
+  const settings = getGlobal();
   const [subj, visitorHeading] = TITLES[kind];
   const meet = booking.meet_url ? [['Google Meet', `<a href="${esc(booking.meet_url)}">${esc(booking.meet_url)}</a>`]] : [];
   const answers = JSON.parse(booking.answers || '[]').map((a) => [a.label, esc(a.value).replace(/\n/g, '<br>')]);
@@ -67,7 +67,7 @@ export async function notify(kind, booking, { manageUrl }) {
   const mails = [
     {
       to: booking.email,
-      subject: `${subj}: ${oneLine(settings.title)}`,
+      subject: `${subj}: ${oneLine(booking.event_title)}`,
       html: layout(visitorHeading, visitorRows, visitorLinks),
       text: plain(visitorHeading, visitorRows, visitorLinks),
     },

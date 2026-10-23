@@ -150,3 +150,23 @@ table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .badge { font-size: 0.75rem; padding: 2px 8px; border-radius: 99px; background: var(--tint); color: var(--accent); }
 .badge.off { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+
+/* ---------- lista de eventos (/book) ---------- */
+.eventrow { display: grid; gap: 2px; padding: 14px 16px; margin: 10px 0; border: 1px solid var(--border); border-left: 5px solid var(--accent); border-radius: 10px; color: var(--fg); text-decoration: none; word-break: normal; }
+.eventrow:hover { background: var(--surface); }
+.eventrow .desc { font-size: 0.9rem; color: var(--muted); }
+.back { display: inline-block; margin-bottom: 14px; font-size: 0.9rem; text-decoration: none; }
+[hidden] { display: none !important; }
+
+/* ---------- panel: lista de eventos ---------- */
+.erow { display: grid; grid-template-columns: 1fr auto; gap: 10px 16px; align-items: center; padding: 14px; border: 1px solid var(--border); border-left: 5px solid var(--accent); border-radius: 10px; background: var(--surface); }
+.erow h3 { margin: 0; font-size: 1.05rem; }
+.erow .tools { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.erow .tools button { padding: 4px 10px; font-size: 0.85rem; }
+.erow.off { opacity: 0.65; }
+.subtabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px; }
+.subtabs button.active { background: var(--tint); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.slugrow { display: flex; align-items: center; gap: 6px; }
+.slugrow span { color: var(--muted); white-space: nowrap; font-weight: 400; }
+
+.erow a { word-break: normal; overflow-wrap: anywhere; }

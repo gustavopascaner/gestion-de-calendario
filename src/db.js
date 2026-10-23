@@ -28,13 +28,28 @@ db.exec(`
     ON bookings (start_utc) WHERE status = 'confirmed';
 
   CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+  -- Tipos de evento: slug/orden/activo como columnas, el resto de la configuración en JSON.
+  CREATE TABLE IF NOT EXISTS event_types (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug     TEXT NOT NULL UNIQUE,
+    position INTEGER NOT NULL DEFAULT 0,
+    active   INTEGER NOT NULL DEFAULT 1,
+    data     TEXT NOT NULL
+  );
 `);
 
-// Respuestas del formulario configurable: [{ id, label, value }] en JSON.
-try {
-  db.exec("ALTER TABLE bookings ADD COLUMN answers TEXT NOT NULL DEFAULT '[]'");
-} catch {
-  // la columna ya existe
+// Migraciones livianas: agregan la columna solo si todavía no existe.
+for (const sql of [
+  "ALTER TABLE bookings ADD COLUMN answers TEXT NOT NULL DEFAULT '[]'", // respuestas del formulario: [{ id, label, value }]
+  'ALTER TABLE bookings ADD COLUMN event_type_id INTEGER',
+  "ALTER TABLE bookings ADD COLUMN event_title TEXT NOT NULL DEFAULT ''",
+]) {
+  try {
+    db.exec(sql);
+  } catch {
+    // la columna ya existe
+  }
 }
 
 export const getKv = (key) => db.prepare('SELECT value FROM kv WHERE key = ?').get(key)?.value ?? null;

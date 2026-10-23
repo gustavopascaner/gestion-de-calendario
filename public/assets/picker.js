@@ -6,7 +6,7 @@ const WEEKDAYS = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
  * Calendario mensual + lista de horarios, en la zona horaria del visitante.
  * onSelect(startMs, tz) se llama al apretar "Siguiente" junto al horario elegido.
  */
-export async function mountPicker(root, { onSelect }) {
+export async function mountPicker(root, { slug, onSelect }) {
   const state = { tz: detectTz(), month: null, day: null, pending: null, slots: [], byDay: new Map() };
 
   function group() {
@@ -21,7 +21,7 @@ export async function mountPicker(root, { onSelect }) {
   async function load() {
     root.replaceChildren(el('p', { class: 'muted' }, 'Cargando horarios…'));
     try {
-      state.slots = (await api('/api/slots')).slots;
+      state.slots = (await api(`/api/slots?slug=${encodeURIComponent(slug)}`)).slots;
     } catch (err) {
       root.replaceChildren(el('p', { class: 'error' }, err.message));
       return;

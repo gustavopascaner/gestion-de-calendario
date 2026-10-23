@@ -5,7 +5,8 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DateTime } from 'luxon';
 import db from './db.js';
-import { getSettings, saveSettings, SettingsError } from './settings.js';
+import { DEFAULT_EVENT, SettingsError, getGlobal, saveGlobal } from './settings.js';
+import { createEvent, deleteEvent, duplicateEvent, getEvent, getEventBySlug, listEvents, reorderEvents, seedEvents, updateEvent } from './events.js';
 import { generateSlots } from './availability.js';
 import { sign, verify } from './tokens.js';
 import * as google from './google.js';
@@ -19,11 +20,22 @@ const TOKEN_TTL = 90 * 24 * 3_600_000;
 const ADMIN_TTL = 12 * 3_600_000;
 
 sign({ act: 'check', exp: 0 }); // falla al arrancar si falta SIGNING_SECRET
+seedEvents();
 
 class HttpError extends Error {
   constructor(status, message) {
     super(message);
     this.status = status;
+  }
+}
+
+// Convierte errores de validación en respuestas 400.
+function guard(fn) {
+  try {
+    return fn();
+  } catch (err) {
+    if (err instanceof SettingsError) throw new HttpError(400, err.message);
+    throw err;
   }
 }
 
@@ -34,12 +46,13 @@ let busyCache = null; // evita llamar a Google en cada visita; las reservas siem
 async function googleBusy(now, { fresh }) {
   if (!google.isConnected()) return [];
   if (!fresh && busyCache && Date.now() - busyCache.at < 60_000) return busyCache.data;
-  const horizonEnd = now + (getSettings().horizonDays + 1) * 86_400_000;
-  const data = await google.getBusy(now - 86_400_000, horizonEnd);
+  const days = Math.max(1, ...listEvents().map((e) => e.horizonDays));
+  const data = await google.getBusy(now - 86_400_000, now + (days + 1) * 86_400_000);
   busyCache = { at: Date.now(), data };
   return data;
 }
 
+// Todas las reservas bloquean a todos los tipos de evento: sos una sola persona.
 function dbBlocked(now, excludeId = '') {
   return db
     .prepare("SELECT start_utc AS start, end_utc AS end FROM bookings WHERE status = 'confirmed' AND end_utc > ? AND id != ?")
@@ -49,7 +62,7 @@ function dbBlocked(now, excludeId = '') {
 
 // Nota: en una reprogramación el evento viejo sigue ocupado en Google, así que su propio horario
 // no se ofrece como destino (no tiene sentido moverlo a donde ya está).
-async function availableSlots({ fresh = false, excludeId = '' } = {}) {
+async function availableSlots(event, { fresh = false, excludeId = '' } = {}) {
   const now = Date.now();
   let busy = [];
   try {
@@ -58,7 +71,7 @@ async function availableSlots({ fresh = false, excludeId = '' } = {}) {
     if (fresh) throw new HttpError(503, 'No pude consultar el calendario. Probá de nuevo en un momento.');
     console.error('[google] freeBusy falló, mostrando solo reservas locales:', err.message);
   }
-  return generateSlots(getSettings(), now, [...dbBlocked(now, excludeId), ...busy]);
+  return generateSlots({ ...event, timezone: getGlobal().timezone }, now, [...dbBlocked(now, excludeId), ...busy]);
 }
 
 // ---------- helpers HTTP ----------
@@ -140,18 +153,17 @@ function bookingFromToken(token) {
   return booking;
 }
 
-const publicEvent = (s) => ({
-  title: s.title,
-  description: s.description,
-  location: s.location,
-  ownerName: s.ownerName,
-  slotMinutes: s.slotMinutes,
-  accentColor: s.accentColor,
-  fields: s.fields,
-});
+function activeEvent(slug) {
+  const event = getEventBySlug(String(slug ?? ''));
+  if (!event || !event.active) throw new HttpError(404, 'Este evento no existe o no está disponible.');
+  return event;
+}
+
+const summary = (e) => ({ slug: e.slug, title: e.title, description: e.description, location: e.location, slotMinutes: e.slotMinutes, accentColor: e.accentColor });
+const publicEvent = (e) => ({ ...summary(e), ownerName: getGlobal().ownerName, fields: e.fields });
 
 const view = (b) => {
-  const s = getSettings();
+  const event = getEvent(b.event_type_id);
   return {
     id: b.id,
     name: b.name,
@@ -162,11 +174,12 @@ const view = (b) => {
     status: b.status,
     meetUrl: b.meet_url,
     answers: JSON.parse(b.answers || '[]'),
-    title: s.title,
-    ownerName: s.ownerName,
-    location: s.location,
-    accentColor: s.accentColor,
-    confirmationMessage: s.confirmationMessage,
+    title: b.event_title,
+    slug: event?.slug ?? '',
+    ownerName: getGlobal().ownerName,
+    location: event?.location ?? '',
+    accentColor: event?.accentColor ?? DEFAULT_EVENT.accentColor,
+    confirmationMessage: event?.confirmationMessage ?? '',
   };
 };
 
@@ -202,26 +215,27 @@ function parseAnswers(fields, raw) {
 }
 
 async function createBooking(body) {
-  const settings = getSettings();
+  const event = activeEvent(body.slug);
+  const tzOwner = getGlobal().timezone;
   const name = String(body.name ?? '').trim();
   const email = String(body.email ?? '').trim();
   if (!name || name.length > 100) throw new HttpError(400, 'Ingresá tu nombre (máx. 100 caracteres).');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) throw new HttpError(400, 'Ingresá un email válido.');
-  const answers = parseAnswers(settings.fields, body.answers);
+  const answers = parseAnswers(event.fields, body.answers);
   const note = answers.map((a) => `${a.label}: ${a.value}`).join('\n');
-  const tz = isTz(body.tz) ? body.tz : settings.timezone;
+  const tz = isTz(body.tz) ? body.tz : tzOwner;
   const start = parseStart(body.start);
 
-  const slots = await availableSlots({ fresh: true });
+  const slots = await availableSlots(event, { fresh: true });
   if (!slots.includes(start)) throw new HttpError(409, 'Ese horario ya no está disponible. Elegí otro.');
 
   // Sin awaits entre la verificación y el INSERT: en un solo proceso esto es atómico.
   const id = crypto.randomBytes(9).toString('base64url');
-  const end = start + settings.slotMinutes * 60_000;
+  const end = start + event.slotMinutes * 60_000;
   try {
-    db.prepare('INSERT INTO bookings (id, start_utc, end_utc, name, email, note, answers, tz, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
-      id, start, end, name, email, note, JSON.stringify(answers), tz, Date.now(),
-    );
+    db.prepare(
+      'INSERT INTO bookings (id, start_utc, end_utc, name, email, note, answers, tz, event_type_id, event_title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, start, end, name, email, note, JSON.stringify(answers), tz, event.id, event.title, Date.now());
   } catch (err) {
     if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'Ese horario ya no está disponible. Elegí otro.');
     throw err;
@@ -230,7 +244,7 @@ async function createBooking(body) {
   let booking = getBooking(id);
   if (google.isConnected()) {
     try {
-      const ev = await google.createEvent({ booking, title: settings.title, ownerTz: settings.timezone });
+      const ev = await google.createEvent({ booking, title: event.title, ownerTz: tzOwner });
       db.prepare('UPDATE bookings SET google_event_id = ?, meet_url = ? WHERE id = ?').run(ev.id, ev.meetUrl, id);
       booking = getBooking(id);
     } catch (err) {
@@ -243,7 +257,7 @@ async function createBooking(body) {
 
   const token = manageToken(id);
   await notify('confirmed', booking, { manageUrl: manageUrl(token) });
-  return { token, redirectUrl: settings.redirectUrl || null };
+  return { token, redirectUrl: event.redirectUrl || null };
 }
 
 async function cancelBooking(booking) {
@@ -265,13 +279,14 @@ async function rescheduleBooking(token, startValue) {
   const booking = bookingFromToken(token);
   if (booking.status !== 'confirmed') throw new HttpError(409, 'Esta reserva está cancelada.');
   if (booking.start_utc <= Date.now()) throw new HttpError(409, 'La reunión ya comenzó.');
+  const event = getEvent(booking.event_type_id);
+  if (!event) throw new HttpError(409, 'El tipo de evento ya no existe.');
   const start = parseStart(startValue);
 
-  const slots = await availableSlots({ fresh: true, excludeId: booking.id });
+  const slots = await availableSlots(event, { fresh: true, excludeId: booking.id });
   if (!slots.includes(start)) throw new HttpError(409, 'Ese horario ya no está disponible. Elegí otro.');
 
-  const settings = getSettings();
-  const end = start + settings.slotMinutes * 60_000;
+  const end = start + event.slotMinutes * 60_000;
   const update = db.prepare('UPDATE bookings SET start_utc = ?, end_utc = ? WHERE id = ?');
   try {
     update.run(start, end, booking.id);
@@ -281,7 +296,7 @@ async function rescheduleBooking(token, startValue) {
   }
   if (booking.google_event_id) {
     try {
-      await google.moveEvent(booking.google_event_id, start, end, settings.timezone);
+      await google.moveEvent(booking.google_event_id, start, end, getGlobal().timezone);
     } catch (err) {
       update.run(booking.start_utc, booking.end_utc, booking.id);
       console.error('[google] no se pudo mover el evento:', err.message);
@@ -322,31 +337,44 @@ async function handleAdminApi(req, res, url) {
   }
 
   requireAdmin(req);
+  const body = req.method === 'POST' || req.method === 'PUT' ? await readJson(req) : {};
+  const eventRoute = /^\/api\/admin\/events\/(\d+)$/.exec(url.pathname);
+  if (eventRoute) {
+    const id = Number(eventRoute[1]);
+    if (req.method === 'PUT') return sendJson(res, 200, { event: guard(() => updateEvent(id, body)) });
+    if (req.method === 'DELETE') {
+      guard(() => deleteEvent(id));
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+
   switch (route) {
     case 'GET /api/admin/settings':
       return sendJson(res, 200, {
-        settings: getSettings(),
+        global: getGlobal(),
+        events: listEvents(),
+        defaultEvent: { ...DEFAULT_EVENT, slug: '', title: 'Nuevo evento' },
         google: { configured: google.isConfigured(), connected: google.isConnected() },
         smtp: Boolean(process.env.SMTP_HOST),
       });
-    case 'PUT /api/admin/settings':
-      try {
-        const settings = saveSettings(await readJson(req));
-        busyCache = null;
-        return sendJson(res, 200, { settings });
-      } catch (err) {
-        if (err instanceof SettingsError) throw new HttpError(400, err.message);
-        throw err;
-      }
+    case 'PUT /api/admin/global':
+      return sendJson(res, 200, { global: guard(() => saveGlobal(body)) });
+    case 'POST /api/admin/events': {
+      const event = guard(() => (body.duplicateOf ? duplicateEvent(Number(body.duplicateOf)) : createEvent(body)));
+      return sendJson(res, 201, { event });
+    }
+    case 'POST /api/admin/events/order':
+      guard(() => reorderEvents(body.ids));
+      return sendJson(res, 200, { ok: true });
     case 'GET /api/admin/bookings': {
       const now = Date.now();
       const rows = db
         .prepare("SELECT * FROM bookings WHERE (status = 'confirmed' AND end_utc > ?) OR (status = 'cancelled' AND created_at > ?) ORDER BY start_utc")
         .all(now, now - 30 * 86_400_000);
-      return sendJson(res, 200, { bookings: rows.map((b) => ({ ...view(b), id: b.id })) });
+      return sendJson(res, 200, { bookings: rows.map(view) });
     }
     case 'POST /api/admin/cancel': {
-      const booking = getBooking((await readJson(req)).id);
+      const booking = getBooking(body.id);
       if (!booking) throw new HttpError(404, 'Reserva no encontrada');
       await cancelBooking(booking);
       return sendJson(res, 200, { ok: true });
@@ -379,10 +407,12 @@ async function handleGoogleOAuth(req, res, url) {
 async function handleApi(req, res, url) {
   const route = `${req.method} ${url.pathname}`;
   switch (route) {
+    case 'GET /api/events':
+      return sendJson(res, 200, { ownerName: getGlobal().ownerName, events: listEvents().filter((e) => e.active).map(summary) });
     case 'GET /api/event':
-      return sendJson(res, 200, publicEvent(getSettings()));
+      return sendJson(res, 200, publicEvent(activeEvent(url.searchParams.get('slug'))));
     case 'GET /api/slots':
-      return sendJson(res, 200, { slots: await availableSlots(), timezone: getSettings().timezone });
+      return sendJson(res, 200, { slots: await availableSlots(activeEvent(url.searchParams.get('slug'))), timezone: getGlobal().timezone });
     case 'POST /api/book':
       rateLimit(req, 'book', 10, 3_600_000);
       return sendJson(res, 201, await createBooking(await readJson(req)));
@@ -416,6 +446,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/admin/')) return await handleAdminApi(req, res, url);
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
     if (url.pathname.startsWith('/admin/google/')) return await handleGoogleOAuth(req, res, url);
+    if (req.method === 'GET' && url.pathname.startsWith('/book/')) return serveFile(res, 'book.html'); // /book/<slug>
     if (req.method === 'GET' && PAGES[url.pathname]) {
       // El panel nunca debe poder embeberse en otro sitio.
       return serveFile(res, PAGES[url.pathname], url.pathname === '/admin' ? { 'Content-Security-Policy': "default-src 'self'; frame-ancestors 'none'" } : {});
@@ -434,6 +465,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Reservas en ${BASE_URL}/book`);
+  console.log(`Eventos: ${listEvents().map((e) => `/book/${e.slug}${e.active ? '' : ' (inactivo)'}`).join(', ') || 'ninguno'}`);
   console.log(`Panel: ${process.env.ADMIN_SECRET ? `${BASE_URL}/admin` : 'desactivado (definí ADMIN_SECRET)'}`);
   console.log(`Google Calendar: ${google.isConnected() ? 'conectado' : google.isConfigured() ? 'configurado, falta conectar desde el panel' : 'sin configurar (solo SQLite)'}`);
   console.log(`SMTP: ${process.env.SMTP_HOST ? process.env.SMTP_HOST : 'sin configurar (los mails solo se registran en consola)'}`);
