@@ -11,6 +11,7 @@ import { generateSlots } from './availability.js';
 import { sign, verify } from './tokens.js';
 import * as google from './google.js';
 import { notify } from './mail.js';
+import { emit, listDeliveries, sendTest } from './webhooks.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
@@ -44,7 +45,7 @@ function guard(fn) {
 let busyCache = null; // evita llamar a Google en cada visita; las reservas siempre consultan en fresco
 
 async function googleBusy(now, { fresh }) {
-  if (!google.isConnected()) return [];
+  if (!google.canCheckBusy()) return [];
   if (!fresh && busyCache && Date.now() - busyCache.at < 60_000) return busyCache.data;
   const days = Math.max(1, ...listEvents().map((e) => e.horizonDays));
   const data = await google.getBusy(now - 86_400_000, now + (days + 1) * 86_400_000);
@@ -183,6 +184,19 @@ const view = (b) => {
   };
 };
 
+// El panel nunca recibe el secreto del webhook, solo si hay uno guardado.
+const safeGlobal = ({ webhookSecret, ...g }) => ({ ...g, webhookSecretSet: Boolean(webhookSecret) });
+
+// Solo se guardan parámetros utm_* cortos del link de origen (útiles para atribución en n8n).
+function parseTracking(raw) {
+  const out = {};
+  for (const key of ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term']) {
+    const value = String(raw?.[key] ?? '').trim().slice(0, 200);
+    if (value) out[key] = value;
+  }
+  return out;
+}
+
 const isTz = (tz) => typeof tz === 'string' && DateTime.now().setZone(tz).isValid;
 
 function parseStart(value) {
@@ -234,8 +248,8 @@ async function createBooking(body) {
   const end = start + event.slotMinutes * 60_000;
   try {
     db.prepare(
-      'INSERT INTO bookings (id, start_utc, end_utc, name, email, note, answers, tz, event_type_id, event_title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(id, start, end, name, email, note, JSON.stringify(answers), tz, event.id, event.title, Date.now());
+      'INSERT INTO bookings (id, start_utc, end_utc, name, email, note, answers, tz, event_type_id, event_title, tracking, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, start, end, name, email, note, JSON.stringify(answers), tz, event.id, event.title, JSON.stringify(parseTracking(body.tracking)), Date.now());
   } catch (err) {
     if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'Ese horario ya no está disponible. Elegí otro.');
     throw err;
@@ -256,6 +270,7 @@ async function createBooking(body) {
   busyCache = null;
 
   const token = manageToken(id);
+  emit('invitee.created', booking, { baseUrl: BASE_URL, manageUrl: manageUrl(token), event });
   await notify('confirmed', booking, { manageUrl: manageUrl(token) });
   return { token, redirectUrl: event.redirectUrl || null };
 }
@@ -272,6 +287,7 @@ async function cancelBooking(booking) {
       console.error('[google] no se pudo borrar el evento:', err.message);
     }
   }
+  emit('invitee.canceled', getBooking(booking.id), { baseUrl: BASE_URL });
   await notify('cancelled', getBooking(booking.id), { manageUrl: '' });
 }
 
@@ -304,6 +320,7 @@ async function rescheduleBooking(token, startValue) {
     }
   }
   busyCache = null;
+  emit('invitee.rescheduled', getBooking(booking.id), { baseUrl: BASE_URL, manageUrl: manageUrl(token), previousStart: booking.start_utc, event });
   await notify('rescheduled', getBooking(booking.id), { manageUrl: manageUrl(token) });
 }
 
@@ -348,17 +365,28 @@ async function handleAdminApi(req, res, url) {
     }
   }
 
+  const busyRoute = /^\/api\/admin\/google\/busy\/(\d+)$/.exec(url.pathname);
+  if (busyRoute && req.method === 'DELETE') {
+    google.removeBusyAccount(busyRoute[1]);
+    busyCache = null;
+    return sendJson(res, 200, { ok: true });
+  }
+
   switch (route) {
     case 'GET /api/admin/settings':
       return sendJson(res, 200, {
-        global: getGlobal(),
+        global: safeGlobal(getGlobal()),
+        busyAccounts: google.listBusyAccounts(),
+        deliveries: listDeliveries(),
         events: listEvents(),
         defaultEvent: { ...DEFAULT_EVENT, slug: '', title: 'Nuevo evento' },
         google: { configured: google.isConfigured(), connected: google.isConnected() },
         smtp: Boolean(process.env.SMTP_HOST),
       });
     case 'PUT /api/admin/global':
-      return sendJson(res, 200, { global: guard(() => saveGlobal(body)) });
+      return sendJson(res, 200, { global: safeGlobal(guard(() => saveGlobal(body))), deliveries: listDeliveries() });
+    case 'POST /api/admin/webhook/test':
+      return sendJson(res, 200, { ...(await sendTest(BASE_URL)), deliveries: listDeliveries() });
     case 'POST /api/admin/events': {
       const event = guard(() => (body.duplicateOf ? duplicateEvent(Number(body.duplicateOf)) : createEvent(body)));
       return sendJson(res, 201, { event });
@@ -388,16 +416,18 @@ async function handleGoogleOAuth(req, res, url) {
   if (!google.isConfigured()) throw new HttpError(404, 'Google no está configurado en .env');
   if (url.pathname === '/admin/google/connect') {
     requireAdmin(req);
-    const state = sign({ act: 'oauth', exp: Date.now() + 10 * 60_000 });
-    res.writeHead(302, { Location: google.authUrl(state) });
+    const mode = url.searchParams.get('mode') === 'busy' ? 'busy' : 'primary';
+    const state = sign({ act: 'oauth', mode, exp: Date.now() + 10 * 60_000 });
+    res.writeHead(302, { Location: google.authUrl(state, mode) });
     return res.end();
   }
   if (url.pathname === '/admin/google/callback') {
-    if (!verify(url.searchParams.get('state'), 'oauth')) throw new HttpError(400, 'Estado OAuth inválido o vencido. Empezá de nuevo desde el panel.');
+    const oauth = verify(url.searchParams.get('state'), 'oauth');
+    if (!oauth) throw new HttpError(400, 'Estado OAuth inválido o vencido. Empezá de nuevo desde el panel.');
     if (url.searchParams.get('error')) throw new HttpError(400, `Google rechazó el acceso: ${url.searchParams.get('error')}`);
-    await google.exchangeCode(url.searchParams.get('code') ?? '');
+    await google.exchangeCode(url.searchParams.get('code') ?? '', oauth.mode);
     busyCache = null;
-    return sendHtml(res, 200, '<!doctype html><meta charset="utf-8"><title>Conectado</title><h1>Google Calendar conectado ✅</h1><p><a href="/admin">Volver al panel</a></p>');
+    return sendHtml(res, 200, `<!doctype html><meta charset="utf-8"><title>Conectado</title><h1>${oauth.mode === 'busy' ? 'Cuenta agregada para chequear disponibilidad' : 'Google Calendar conectado'} ✅</h1><p><a href="/admin">Volver al panel</a></p>`);
   }
   throw new HttpError(404, 'No encontrado');
 }

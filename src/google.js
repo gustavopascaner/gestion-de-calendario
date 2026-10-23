@@ -1,13 +1,14 @@
 import crypto from 'node:crypto';
-import { getKv, setKv } from './db.js';
+import db, { getKv, setKv } from './db.js';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const API = 'https://www.googleapis.com/calendar/v3';
-const SCOPES = [
-  'https://www.googleapis.com/auth/calendar.events',
-  'https://www.googleapis.com/auth/calendar.freebusy',
-];
+
+// Cuenta principal: crea eventos con Meet y consulta disponibilidad.
+const SCOPES_PRIMARY = ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.freebusy'];
+// Cuentas extra: solo disponibilidad (freeBusy) + el email para mostrarla en el panel.
+const SCOPES_BUSY = ['https://www.googleapis.com/auth/calendar.freebusy', 'https://www.googleapis.com/auth/userinfo.email'];
 
 const env = () => ({
   clientId: process.env.GOOGLE_CLIENT_ID,
@@ -20,17 +21,25 @@ export const isConfigured = () => {
   const e = env();
   return Boolean(e.clientId && e.clientSecret && e.redirectUri);
 };
-export const isConnected = () => isConfigured() && Boolean(getKv('google_refresh_token'));
 
-export function authUrl(state) {
+const primaryRefresh = () => getKv('google_refresh_token');
+export const isConnected = () => isConfigured() && Boolean(primaryRefresh());
+
+export const listBusyAccounts = () => db.prepare('SELECT id, email FROM google_busy_accounts ORDER BY id').all().map((a) => ({ id: a.id, email: a.email }));
+export const removeBusyAccount = (id) => db.prepare('DELETE FROM google_busy_accounts WHERE id = ?').run(Number(id));
+
+/** ¿Hay alguna cuenta de la que consultar disponibilidad? */
+export const canCheckBusy = () => isConfigured() && (Boolean(primaryRefresh()) || listBusyAccounts().length > 0);
+
+export function authUrl(state, mode = 'primary') {
   const e = env();
   const q = new URLSearchParams({
     client_id: e.clientId,
     redirect_uri: e.redirectUri,
     response_type: 'code',
-    scope: SCOPES.join(' '),
+    scope: (mode === 'busy' ? SCOPES_BUSY : SCOPES_PRIMARY).join(' '),
     access_type: 'offline',
-    prompt: 'consent', // fuerza a Google a devolver refresh_token
+    prompt: 'consent select_account', // fuerza refresh_token y deja elegir la cuenta
     state,
   });
   return `${AUTH_URL}?${q}`;
@@ -48,30 +57,39 @@ async function tokenRequest(params) {
   return data;
 }
 
-export async function exchangeCode(code) {
+const cache = new Map(); // refresh_token -> { token, exp }
+
+async function accessToken(refresh) {
+  if (!refresh) throw new Error('Google Calendar no está conectado (conectalo desde el panel)');
+  const hit = cache.get(refresh);
+  if (hit && hit.exp > Date.now()) return hit.token;
+  const data = await tokenRequest({ grant_type: 'refresh_token', refresh_token: refresh });
+  cache.set(refresh, { token: data.access_token, exp: Date.now() + (data.expires_in - 60) * 1000 });
+  return data.access_token;
+}
+
+/** Canjea el código de OAuth. mode 'primary' reemplaza la cuenta principal; 'busy' suma una cuenta de solo disponibilidad. */
+export async function exchangeCode(code, mode = 'primary') {
   const data = await tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: env().redirectUri });
   if (!data.refresh_token) {
     throw new Error('Google no devolvió refresh_token. Revocá el acceso en myaccount.google.com/permissions y reconectá.');
   }
-  setKv('google_refresh_token', data.refresh_token);
-  cached = { token: data.access_token, exp: Date.now() + (data.expires_in - 60) * 1000 };
+  cache.set(data.refresh_token, { token: data.access_token, exp: Date.now() + (data.expires_in - 60) * 1000 });
+  if (mode !== 'busy') return setKv('google_refresh_token', data.refresh_token);
+
+  const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: `Bearer ${data.access_token}` } });
+  const email = (await res.json().catch(() => ({}))).email;
+  if (!email) throw new Error('No pude leer el email de la cuenta de Google.');
+  db.prepare(
+    'INSERT INTO google_busy_accounts (email, refresh_token, created_at) VALUES (?, ?, ?) ON CONFLICT(email) DO UPDATE SET refresh_token = excluded.refresh_token',
+  ).run(email, data.refresh_token, Date.now());
 }
 
-let cached = null;
-async function accessToken() {
-  if (cached && cached.exp > Date.now()) return cached.token;
-  const refresh = getKv('google_refresh_token');
-  if (!refresh) throw new Error('Google Calendar no está conectado (visitá /admin/google/connect)');
-  const data = await tokenRequest({ grant_type: 'refresh_token', refresh_token: refresh });
-  cached = { token: data.access_token, exp: Date.now() + (data.expires_in - 60) * 1000 };
-  return cached.token;
-}
-
-async function call(path, { method = 'GET', query, body, okStatuses = [] } = {}) {
+async function call(path, { method = 'GET', query, body, okStatuses = [], refresh = primaryRefresh() } = {}) {
   const url = `${API}${path}${query ? `?${new URLSearchParams(query)}` : ''}`;
   const res = await fetch(url, {
     method,
-    headers: { Authorization: `Bearer ${await accessToken()}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${await accessToken(refresh)}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok && !okStatuses.includes(res.status)) {
@@ -82,21 +100,30 @@ async function call(path, { method = 'GET', query, body, okStatuses = [] } = {})
 
 const calPath = () => `/calendars/${encodeURIComponent(env().calendarId)}`;
 
-/** Intervalos ocupados [{start, end}] en ms. Lanza si Google falla. */
-export async function getBusy(fromMs, toMs) {
-  const { calendarId } = env();
+async function busyFrom({ refresh, calendarId, label }, fromMs, toMs) {
   const data = await call('/freeBusy', {
     method: 'POST',
+    refresh,
     body: { timeMin: new Date(fromMs).toISOString(), timeMax: new Date(toMs).toISOString(), items: [{ id: calendarId }] },
   });
   const cal = data?.calendars?.[calendarId];
-  if (!cal || cal.errors?.length) throw new Error(`Google freeBusy: ${JSON.stringify(cal?.errors ?? 'sin datos')}`);
+  if (!cal || cal.errors?.length) throw new Error(`Google freeBusy (${label}): ${JSON.stringify(cal?.errors ?? 'sin datos')}`);
   return cal.busy.map((b) => ({ start: Date.parse(b.start), end: Date.parse(b.end) }));
+}
+
+/** Intervalos ocupados [{start, end}] en ms, sumando la cuenta principal y las extra. Lanza si alguna falla. */
+export async function getBusy(fromMs, toMs) {
+  const sources = [];
+  if (primaryRefresh()) sources.push({ refresh: primaryRefresh(), calendarId: env().calendarId, label: 'principal' });
+  for (const a of db.prepare('SELECT email, refresh_token FROM google_busy_accounts').all()) {
+    sources.push({ refresh: a.refresh_token, calendarId: 'primary', label: a.email });
+  }
+  return (await Promise.all(sources.map((s) => busyFrom(s, fromMs, toMs)))).flat();
 }
 
 const when = (ms, tz) => ({ dateTime: new Date(ms).toISOString(), timeZone: tz });
 
-/** Crea el evento con Meet e invita al visitante. Devuelve { id, meetUrl }. */
+/** Crea el evento con Meet e invita al visitante (solo en la cuenta principal). Devuelve { id, meetUrl }. */
 export async function createEvent({ booking, title, ownerTz }) {
   const ev = await call(`${calPath()}/events`, {
     method: 'POST',

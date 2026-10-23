@@ -71,6 +71,27 @@ Notas:
 - Si Google falla al reservar, la reserva **no** se confirma (para no prometer un horario que no está en tu calendario).
 - Para crear Meet necesitás una cuenta que lo permita (las cuentas personales de Gmail sirven).
 
+### Cuentas de Google extra (solo disponibilidad)
+
+En `/admin` → **Integraciones** → **+ Conectar otra cuenta de Google**. Esas cuentas **solo se consultan** para saber si estás ocupado (permiso `calendar.freebusy`, sin acceso a los eventos): no se crea ningún evento ni link de Meet ahí. Los horarios ocupados en cualquiera de las cuentas (la principal o las extra) se bloquean en tus páginas de reserva. No hace falta tocar Google Cloud: usan el mismo cliente OAuth y la misma URI de redirección. Si una cuenta extra deja de responder (por ejemplo, revocaste el acceso), las reservas se frenan con un error en vez de arriesgar una doble reserva: reconectala o quitala desde el panel.
+
+## Webhook para n8n
+
+En `/admin` → **Integraciones** → **Webhook (n8n)**: pegá la URL de producción de tu nodo *Webhook* de n8n (método `POST`), un secreto opcional y usá **Enviar prueba** para ver el payload en n8n. Cada vez que alguien reserva, reprograma o cancela se envía un `POST` JSON, **con la misma forma que el de Calendly** (`event` + `payload`), así que los flujos que hoy leen Calendly se adaptan casi sin cambios:
+
+| `event` | Cuándo |
+|---|---|
+| `invitee.created` | nueva reserva |
+| `invitee.rescheduled` | el visitante cambió el horario (`payload.rescheduled: true`, `payload.old_start_time`) |
+| `invitee.canceled` | cancelación (del visitante o desde el panel) |
+| `test` | el botón «Enviar prueba» |
+
+Campos principales de `payload`: `booking_id`, `name`, `first_name`, `last_name`, `email`, `timezone`, `status`, `cancel_url`, `reschedule_url`, `questions_and_answers` (`[{question, answer, position}]` con las preguntas de tu formulario, p. ej. el WhatsApp), `scheduled_event` (`name`, `start_time`, `end_time` en UTC, `status`, `event_type`, `event_type_slug`, `location.join_url` con el Meet, `event_memberships`) y `tracking` (`utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term`).
+
+- **UTM:** agregalos al link o al `src` del iframe (`/book/reunion?utm_source=instagram`) y llegan en `payload.tracking`.
+- **Seguridad:** si definís un secreto, se envía en el header `X-Webhook-Secret`; en n8n podés validarlo con *Authentication → Header Auth* en el nodo Webhook.
+- **Reintentos:** si n8n no responde 2xx, se reintenta a los 2 s, 10 s y 60 s. El panel muestra los últimos envíos con su estado. El webhook nunca bloquea ni hace fallar la reserva.
+
 ## Embeber en una landing
 
 ```html

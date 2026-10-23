@@ -29,6 +29,25 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
+  -- Cuentas de Google extra: solo se consulta su disponibilidad (freeBusy), nunca se escribe en ellas.
+  CREATE TABLE IF NOT EXISTS google_busy_accounts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    email         TEXT NOT NULL UNIQUE,
+    refresh_token TEXT NOT NULL,
+    created_at    INTEGER NOT NULL
+  );
+
+  -- Historial de envíos al webhook (n8n).
+  CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_id TEXT,
+    event      TEXT NOT NULL,
+    status     TEXT NOT NULL,
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+
   -- Tipos de evento: slug/orden/activo como columnas, el resto de la configuración en JSON.
   CREATE TABLE IF NOT EXISTS event_types (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,6 +63,7 @@ for (const sql of [
   "ALTER TABLE bookings ADD COLUMN answers TEXT NOT NULL DEFAULT '[]'", // respuestas del formulario: [{ id, label, value }]
   'ALTER TABLE bookings ADD COLUMN event_type_id INTEGER',
   "ALTER TABLE bookings ADD COLUMN event_title TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE bookings ADD COLUMN tracking TEXT NOT NULL DEFAULT '{}'", // utm_* del link de origen
 ]) {
   try {
     db.exec(sql);

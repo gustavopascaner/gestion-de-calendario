@@ -12,7 +12,7 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 // Valores iniciales: salen de config.js. Lo que se guarda desde /admin tiene prioridad.
-export const DEFAULT_GLOBAL = { ownerName: config.ownerName, timezone: config.timezone };
+export const DEFAULT_GLOBAL = { ownerName: config.ownerName, timezone: config.timezone, webhookUrl: '', webhookSecret: '' };
 
 export const DEFAULT_EVENT = {
   slug: 'reunion',
@@ -98,7 +98,23 @@ const checkTz = (tz) => {
 
 export function validateGlobal(input) {
   if (!input || typeof input !== 'object') throw new SettingsError('Datos inválidos.');
-  return { ownerName: text(input.ownerName, 100, 'Tu nombre', 1), timezone: checkTz(input.timezone) };
+  let webhookUrl = text(input.webhookUrl, 500, 'URL del webhook');
+  if (webhookUrl) {
+    let url;
+    try {
+      url = new URL(webhookUrl);
+    } catch {
+      throw new SettingsError('La URL del webhook no es válida.');
+    }
+    if (!['http:', 'https:'].includes(url.protocol)) throw new SettingsError('La URL del webhook tiene que empezar con http:// o https://');
+    webhookUrl = url.href;
+  }
+  return {
+    ownerName: text(input.ownerName, 100, 'Tu nombre', 1),
+    timezone: checkTz(input.timezone),
+    webhookUrl,
+    webhookSecret: text(input.webhookSecret, 200, 'Secreto del webhook'),
+  };
 }
 
 let globalCache = null;
@@ -110,6 +126,8 @@ export function getGlobal() {
 
 export function saveGlobal(input) {
   const clean = validateGlobal(input);
+  // El panel nunca recibe el secreto guardado: si llega vacío se conserva, salvo que se pida quitarlo.
+  if (!clean.webhookSecret && !input.clearWebhookSecret) clean.webhookSecret = getGlobal().webhookSecret ?? '';
   setKv('global', JSON.stringify(clean));
   globalCache = clean;
   return clean;

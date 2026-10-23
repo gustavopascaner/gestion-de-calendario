@@ -8,6 +8,9 @@ const stage = $('#stage');
 // /book -> lista de eventos (o directo el evento si hay uno solo); /book/<slug> -> ese evento.
 const slugFromPath = location.pathname.split('/').filter(Boolean)[1] ?? null;
 
+// Parámetros utm_* del link (p. ej. /book/reunion?utm_source=instagram): viajan con la reserva hasta el webhook.
+const tracking = Object.fromEntries([...new URLSearchParams(location.search)].filter(([key]) => key.startsWith('utm_')));
+
 function showMessage(text) {
   card.classList.add('single');
   info.hidden = true;
@@ -88,7 +91,7 @@ async function showEvent(slug, hasList) {
           try {
             const { token, redirectUrl } = await api('/api/book', {
               method: 'POST',
-              body: { slug, name: data.get('name'), email: data.get('email'), answers, start: choice.ms, tz: choice.tz },
+              body: { slug, name: data.get('name'), email: data.get('email'), answers, tracking, start: choice.ms, tz: choice.tz },
             });
             if (redirectUrl) {
               try { window.top.location.href = redirectUrl; } catch { location.href = redirectUrl; }

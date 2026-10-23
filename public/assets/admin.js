@@ -340,13 +340,90 @@ function panelReservas() {
 
 function panelIntegraciones() {
   const g = meta.google;
+  const W = { url: G.webhookUrl ?? '', secret: '', clear: false };
+  const msg = el('span', { role: 'status' });
+  const deliveries = el('div');
+
+  const renderDeliveries = () => {
+    const list = meta.deliveries ?? [];
+    deliveries.replaceChildren(
+      list.length
+        ? el('table', {},
+            el('thead', {}, el('tr', {}, ...['Cuándo', 'Evento', 'Estado', 'Intentos', 'Error'].map((h) => el('th', {}, h)))),
+            el('tbody', {}, ...list.map((d) => el('tr', {},
+              el('td', {}, fmtLong(d.created_at, G.timezone)),
+              el('td', {}, d.event),
+              el('td', {}, el('span', { class: `badge${d.status === 'ok' ? '' : ' off'}` }, d.status === 'ok' ? 'Enviado' : d.status === 'failed' ? 'Falló' : 'Reintentando')),
+              el('td', {}, String(d.attempts)),
+              el('td', {}, d.last_error || ''),
+            ))),
+          )
+        : el('p', { class: 'muted' }, 'Todavía no se envió ningún evento.'),
+    );
+  };
+  renderDeliveries();
+
+  const saveBtn = el('button', { type: 'button', class: 'primary' }, 'Guardar webhook');
+  saveBtn.onclick = async () => {
+    msg.className = 'muted';
+    msg.textContent = 'Guardando…';
+    try {
+      const res = await api('/api/admin/global', {
+        method: 'PUT',
+        body: { ownerName: G.ownerName, timezone: G.timezone, webhookUrl: W.url, webhookSecret: W.secret, clearWebhookSecret: W.clear },
+      });
+      G = res.global;
+      meta.deliveries = res.deliveries;
+      renderShell();
+    } catch (err) {
+      msg.className = 'error';
+      msg.textContent = err.message;
+    }
+  };
+  const testBtn = el('button', { type: 'button' }, 'Enviar prueba');
+  testBtn.onclick = async () => {
+    msg.className = 'muted';
+    msg.textContent = 'Enviando…';
+    try {
+      const res = await api('/api/admin/webhook/test', { method: 'POST', body: {} });
+      meta.deliveries = res.deliveries;
+      msg.className = res.ok ? 'ok' : 'error';
+      msg.textContent = res.ok ? 'Prueba enviada ✓ (event: "test")' : `No se pudo enviar: ${res.error}`;
+      renderDeliveries();
+    } catch (err) {
+      msg.className = 'error';
+      msg.textContent = err.message;
+    }
+  };
+
+  const busy = (meta.busyAccounts ?? []).map((a) => {
+    const del = el('button', { type: 'button', class: 'danger' }, 'Quitar');
+    del.onclick = async () => {
+      if (del.dataset.armed !== '1') { del.dataset.armed = '1'; del.textContent = '¿Seguro?'; return; }
+      await api(`/api/admin/google/busy/${a.id}`, { method: 'DELETE' });
+      await reload();
+    };
+    return el('div', { class: 'erow' }, el('div', {}, el('strong', {}, a.email), el('div', { class: 'muted' }, 'Solo se lee si estás ocupado')), el('div', { class: 'tools' }, del));
+  });
+
   return el(
     'div',
     { class: 'panel' },
     el('h2', {}, 'Google Calendar + Meet'),
     !g.configured
       ? el('p', {}, 'Faltan GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET y GOOGLE_REDIRECT_URI en .env. Seguí la guía del README.')
-      : el('p', {}, g.connected ? el('span', { class: 'ok' }, '✅ Conectado. ') : 'Todavía no está conectado. ', el('a', { href: '/admin/google/connect' }, g.connected ? 'Reconectar' : 'Conectar con Google')),
+      : el('p', {}, g.connected ? el('span', { class: 'ok' }, '✅ Cuenta principal conectada (crea los eventos y los links de Meet). ') : 'Todavía no está conectada la cuenta principal. ', el('a', { href: '/admin/google/connect' }, g.connected ? 'Reconectar' : 'Conectar con Google')),
+    el('h2', {}, 'Cuentas extra: solo disponibilidad'),
+    el('p', { class: 'muted' }, 'Los eventos ocupados de estas cuentas bloquean horarios en tus páginas de reserva. No se crea ningún evento ni link de Meet ahí; solo se pide el permiso de «ver si estás libre u ocupado».'),
+    ...busy,
+    g.configured ? el('div', {}, el('a', { href: '/admin/google/connect?mode=busy' }, '+ Conectar otra cuenta de Google')) : null,
+    el('h2', {}, 'Webhook (n8n)'),
+    el('p', { class: 'muted' }, 'Cada vez que alguien reserva, reprograma o cancela, se envía un POST JSON a esta URL (formato parecido al de Calendly: event + payload). En n8n usá un nodo Webhook con método POST.'),
+    field('URL del webhook', el('input', { type: 'url', value: W.url, placeholder: 'https://n8n.tudominio.com/webhook/…', oninput: (e) => { W.url = e.target.value; } })),
+    field('Secreto (opcional)', el('input', { type: 'password', autocomplete: 'off', placeholder: G.webhookSecretSet ? 'Guardado: escribí para reemplazarlo' : 'Se envía en el header X-Webhook-Secret', oninput: (e) => { W.secret = e.target.value; } })),
+    G.webhookSecretSet ? el('label', { class: 'check' }, el('input', { type: 'checkbox', onchange: (e) => { W.clear = e.target.checked; } }), 'Quitar el secreto guardado') : null,
+    el('div', { class: 'actions' }, saveBtn, testBtn, msg),
+    deliveries,
     el('h2', {}, 'Email (SMTP)'),
     el('p', {}, meta.smtp ? el('span', { class: 'ok' }, '✅ Configurado.') : 'Sin configurar: los mails solo se registran en la consola del servidor. Completá SMTP_* en .env.'),
   );
