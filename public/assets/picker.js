@@ -1,4 +1,4 @@
-import { api, el, detectTz, dayKey, fmtTime, fmtDayLong, fmtMonth } from './common.js';
+import { api, el, detectTz, dayKey, fmtTime, fmtDayLong, fmtMonth, tzLabel } from './common.js';
 
 const WEEKDAYS = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
 
@@ -61,7 +61,7 @@ export async function mountPicker(root, { slug, onSelect }) {
           class: `day${avail ? ' avail' : ''}${key === state.day ? ' sel' : ''}`,
           disabled: !avail,
           'aria-pressed': String(key === state.day),
-          onclick: () => { state.day = key; state.pending = null; render(); },
+          onclick: () => { state.day = key; state.pending = null; state.revealTimes = true; render(); },
         }, String(d)),
       );
     }
@@ -88,7 +88,14 @@ export async function mountPicker(root, { slug, onSelect }) {
         el('button', { type: 'button', class: 'nav', 'aria-label': 'Mes siguiente', disabled: state.month >= lastMonth, onclick: () => shift(1) }, '›'),
       ),
       el('div', { class: 'grid' }, ...WEEKDAYS.map((w) => el('span', { class: 'wd' }, w)), ...cells),
-      el('label', { class: 'tzrow' }, el('span', { class: 'muted' }, 'Zona horaria'), tzSelect),
+    );
+
+    // Siempre visible arriba: en qué hora se muestran los horarios (detectada del navegador, se puede cambiar).
+    const tzbar = el(
+      'div',
+      { class: 'tzbar' },
+      el('span', {}, 'Horarios en hora de ', el('strong', {}, tzLabel(state.tz))),
+      el('label', { class: 'muted' }, 'Cambiar zona: ', tzSelect),
     );
 
     const pick = el('div', { class: 'pick' }, calendar);
@@ -99,6 +106,7 @@ export async function mountPicker(root, { slug, onSelect }) {
           'div',
           { class: 'times' },
           el('h3', {}, fmtDayLong(list[0], state.tz)),
+          el('p', { class: 'tzcap' }, tzLabel(state.tz)),
           ...list.map((ms) =>
             el(
               'div',
@@ -110,7 +118,13 @@ export async function mountPicker(root, { slug, onSelect }) {
         ),
       );
     }
-    root.replaceChildren(pick);
+    root.replaceChildren(tzbar, pick);
+
+    // En pantallas angostas la lista de horarios queda debajo del calendario: al elegir un día, mostrarla.
+    if (state.revealTimes) {
+      state.revealTimes = false;
+      if (matchMedia('(max-width: 720px)').matches) root.querySelector('.times')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
   }
 
   await load();

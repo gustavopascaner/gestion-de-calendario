@@ -50,3 +50,9 @@ export function applyTheme(hex) {
   document.documentElement.style.setProperty('--accent', hex);
   document.documentElement.style.setProperty('--accent-fg', light ? '#111111' : '#ffffff');
 }
+
+// "Salta (GMT-3)": nombre corto y legible de una zona horaria IANA, con su desfase actual.
+export function tzLabel(tz) {
+  const offset = new Intl.DateTimeFormat('es', { timeZone: tz, timeZoneName: 'shortOffset' }).formatToParts(Date.now()).find((p) => p.type === 'timeZoneName')?.value ?? '';
+  return `${tz.split('/').pop().replaceAll('_', ' ')} (${offset})`;
+}

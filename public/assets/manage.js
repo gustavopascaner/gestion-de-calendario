@@ -1,4 +1,4 @@
-import { $, el, api, fmtLong, applyTheme, reportHeight } from './common.js';
+import { $, el, api, fmtLong, applyTheme, tzLabel, reportHeight } from './common.js';
 import { mountPicker } from './picker.js';
 
 const root = $('#content');
@@ -15,7 +15,7 @@ async function render() {
   }
 
   applyTheme(b.accentColor);
-  const when = `${fmtLong(b.start, b.tz)} (${b.tz.replaceAll('_', ' ')})`;
+  const when = `${fmtLong(b.start, b.tz)} · ${tzLabel(b.tz)}`;
   const active = b.status === 'confirmed' && b.start > Date.now();
   const heading = b.status === 'cancelled' ? 'Reserva cancelada' : justBooked ? '¡Reserva confirmada!' : 'Tu reserva';
 
@@ -82,7 +82,7 @@ async function reschedule(b) {
           if (err.status === 409) reschedule(b);
         }
       };
-      $('#confirm-new', box).replaceChildren(el('p', { class: 'summary' }, `${fmtLong(ms, tz)} (${tz.replaceAll('_', ' ')})`), error, button);
+      $('#confirm-new', box).replaceChildren(el('p', { class: 'summary' }, `${fmtLong(ms, tz)} · ${tzLabel(tz)}`), error, button);
     },
   });
 }

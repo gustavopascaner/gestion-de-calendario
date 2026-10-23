@@ -2,7 +2,8 @@
 
 Un Calendly casero: un solo proceso Node, SQLite, sin cuentas y sin framework.
 
-- `/book` muestra tus horarios libres de los próximos 14 días en la zona horaria del visitante.
+- `/book` muestra tus horarios libres de los próximos 14 días **en la zona horaria del visitante**: se detecta sola desde su navegador, se muestra bien visible arriba del calendario («Horarios en hora de Madrid (GMT+2)») y puede cambiarla. La reserva, la confirmación y los mails usan esa zona; a vos te llegan en la tuya.
+- Flujo en dos pasos clickeables («Fecha y hora» → «Tus datos») que conserva lo que el visitante ya eligió o escribió al ir y volver; pensado y probado para celular.
 - Diseño tipo Calendly: calendario mensual, horarios, y formulario que configurás vos desde un panel `/admin`.
 - Disponibilidad = reglas semanales (configurables en el panel) − reservas − eventos ocupados de Google Calendar.
 - Al reservar: se crea el evento en tu Google Calendar con link de **Google Meet** y el visitante invitado.
@@ -23,13 +24,16 @@ Node ≥ 22.13 (usa `node:sqlite` incluido, sin compilar nada).
 npm install
 cp .env.example .env     # completá SIGNING_SECRET como mínimo
 npm start                # http://localhost:3000/book
-npm test
+npm test                 # unitarios + end-to-end del flujo completo
 ```
+
+`npm test` incluye un test de punta a punta (`test/e2e.test.js`) que levanta el servidor real con una base temporal y recorre todo: login del panel, ABM de eventos, reservar (con validaciones y doble reserva), agenda compartida entre eventos, reprogramar, cancelar, links manipulados y el webhook. Conviene correrlo antes de cada deploy.
 
 ## Panel de configuración (`/admin`)
 
 Definí `ADMIN_SECRET` en `.env` y entrá a `http://localhost:3000/admin` con esa contraseña. Desde ahí, sin tocar código:
 
+- **Inicio:** próximas reservas, reservas y horas agendadas del mes, canceladas, reservas por evento y el estado de las integraciones (Google, SMTP, webhook).
 - **Eventos (ABM):** creá, editá, duplicá, ordená, activá/desactivá y eliminá tipos de evento (p. ej. «Llamada de 15 min», «Mentoría de 60 min»). Cada uno tiene su propio link `/book/<slug>`, y botones para copiar el link o el código del `<iframe>`. Un evento con reservas no se puede borrar: desactivalo para ocultarlo. Al editar un evento:
   - **Detalles:** título, link, activo, descripción, ubicación, duración, descanso entre reuniones, antelación mínima y días hacia adelante.
   - **Horarios:** días y tramos horarios propios de ese evento (varios tramos por día).

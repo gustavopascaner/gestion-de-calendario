@@ -2,7 +2,7 @@ import { $, el, api, fmtLong, applyTheme } from './common.js';
 
 const DAYS = [['mon', 'Lunes'], ['tue', 'Martes'], ['wed', 'Miércoles'], ['thu', 'Jueves'], ['fri', 'Viernes'], ['sat', 'Sábado'], ['sun', 'Domingo']];
 const TYPES = [['text', 'Texto corto'], ['textarea', 'Texto largo'], ['tel', 'Teléfono'], ['select', 'Lista desplegable'], ['checkbox', 'Casilla (sí/no)']];
-const TABS = [['eventos', 'Eventos'], ['reservas', 'Reservas'], ['general', 'General'], ['integraciones', 'Integraciones']];
+const TABS = [['inicio', 'Inicio'], ['eventos', 'Eventos'], ['reservas', 'Reservas'], ['general', 'General'], ['integraciones', 'Integraciones']];
 const EDITOR_TABS = [['detalles', 'Detalles'], ['horarios', 'Horarios'], ['formulario', 'Formulario'], ['apariencia', 'Apariencia']];
 
 const app = $('#app');
@@ -10,7 +10,7 @@ let G; // ajustes generales
 let events = []; // tipos de evento guardados
 let meta; // { google, smtp, defaultEvent }
 let S = null; // evento en edición (copia)
-let tab = 'eventos';
+let tab = 'inicio';
 let etab = 'detalles';
 let dirty = false;
 let saveMsg = null;
@@ -303,6 +303,57 @@ function panelGeneral() {
   );
 }
 
+function panelInicio() {
+  const box = el('div', { class: 'panel' }, el('p', { class: 'muted' }, 'Cargando…'));
+  (async () => {
+    let s;
+    try {
+      s = await api('/api/admin/stats');
+    } catch (err) {
+      box.replaceChildren(el('p', { class: 'error' }, err.message));
+      return;
+    }
+    const stat = (n, label) => el('div', { class: 'stat' }, el('strong', {}, String(n)), el('span', {}, label));
+    const chip = (ok, text) => el('span', { class: `badge${ok ? '' : ' off'}` }, `${ok ? '✓' : '✗'} ${text}`);
+    const max = Math.max(1, ...s.byEvent.map((e) => e.n));
+    const extra = meta.busyAccounts?.length ?? 0;
+
+    box.replaceChildren(
+      el('div', { class: 'stats' },
+        stat(s.upcoming, 'Próximas reservas'),
+        stat(s.week, 'En los próximos 7 días'),
+        stat(s.monthCount, `Reservas en ${s.monthLabel}`),
+        stat(`${s.monthHours} h`, 'Horas agendadas este mes'),
+        stat(s.monthCancelled, 'Canceladas este mes'),
+        stat(s.activeEvents, 'Eventos activos')),
+      el('h2', {}, 'Próximas reuniones'),
+      s.next.length
+        ? el('table', {},
+            el('thead', {}, el('tr', {}, ...['Cuándo', 'Evento', 'Quién'].map((h) => el('th', {}, h)))),
+            el('tbody', {}, ...s.next.map((b) => el('tr', {},
+              el('td', {}, fmtLong(b.start, G.timezone)),
+              el('td', {}, b.title),
+              el('td', {}, b.name, el('br'), el('a', { href: `mailto:${b.email}` }, b.email))))))
+        : el('p', { class: 'muted' }, 'No hay reuniones próximas.'),
+      el('h2', {}, `Reservas por evento (${s.monthLabel})`),
+      ...(s.byEvent.length
+        ? s.byEvent.map((e) => {
+            const bar = el('div', { class: 'bar' });
+            bar.style.width = `${Math.round((e.n / max) * 100)}%`; // CSSOM: permitido por la CSP
+            return el('div', { class: 'barrow' }, el('span', {}, e.title), bar, el('strong', {}, String(e.n)));
+          })
+        : [el('p', { class: 'muted' }, 'Todavía no hay reservas este mes.')]),
+      el('h2', {}, 'Estado'),
+      el('div', { class: 'chips' },
+        chip(meta.google.connected, 'Google Calendar'),
+        chip(extra > 0, extra === 1 ? '1 cuenta extra' : `${extra} cuentas extra`),
+        chip(meta.smtp, 'Email (SMTP)'),
+        chip(Boolean(G.webhookUrl), 'Webhook n8n')),
+    );
+  })();
+  return box;
+}
+
 function panelReservas() {
   const box = el('div', { class: 'panel' }, el('p', { class: 'muted' }, 'Cargando…'));
   (async () => {
@@ -505,7 +556,7 @@ function renderShell() {
   app.replaceChildren(tabs, body, el('div', { id: 'savebar', class: 'savebar' }));
 
   if (tab === 'eventos' && S) renderEditorPanel();
-  else $('#main-panel').replaceChildren({ eventos: panelEventos, reservas: panelReservas, general: panelGeneral, integraciones: panelIntegraciones }[tab]());
+  else $('#main-panel').replaceChildren({ inicio: panelInicio, eventos: panelEventos, reservas: panelReservas, general: panelGeneral, integraciones: panelIntegraciones }[tab]());
   renderSaveBar($('#savebar'));
 }
 

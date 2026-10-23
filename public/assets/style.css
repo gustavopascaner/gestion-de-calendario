@@ -170,3 +170,40 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--bord
 .slugrow span { color: var(--muted); white-space: nowrap; font-weight: 400; }
 
 .erow a { word-break: normal; overflow-wrap: anywhere; }
+
+/* ---------- zona horaria y pasos ---------- */
+.tzbar { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; padding: 10px 12px; border-radius: 8px; background: var(--tint); font-size: 0.9rem; }
+.tzbar select { width: auto; max-width: 100%; padding: 4px 8px; font-size: 0.85rem; }
+.times .tzcap { margin: -6px 0 10px; font-size: 0.8rem; color: var(--muted); }
+.steps { display: flex; gap: 6px; flex-wrap: wrap; list-style: none; margin: 0 0 20px; padding: 0; }
+.steps button { display: flex; gap: 8px; align-items: center; border: 0; background: none; padding: 6px 12px; border-radius: 99px; color: var(--muted); }
+.steps button:disabled { opacity: 0.5; cursor: default; }
+.steps .n { width: 22px; height: 22px; border-radius: 50%; border: 1px solid currentColor; display: inline-grid; place-items: center; font-size: 0.8rem; }
+.steps li.on button { color: var(--accent); font-weight: 700; background: var(--tint); }
+.steps li.on .n { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.steps li.done button { color: var(--fg); }
+
+/* ---------- panel: inicio ---------- */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.stat { padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.stat strong { display: block; font-size: 1.8rem; line-height: 1.1; }
+.stat span { color: var(--muted); font-size: 0.85rem; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.bar { height: 8px; border-radius: 4px; background: var(--accent); min-width: 4px; }
+.barrow { display: grid; grid-template-columns: minmax(120px, 220px) 1fr auto; gap: 10px; align-items: center; font-size: 0.9rem; }
+
+@media (max-width: 720px) {
+  .times { flex: 1 1 100%; max-height: none; overflow: visible; padding-right: 0; }
+  .slot button { padding: 13px 8px; }
+  .tzbar { flex-direction: column; align-items: stretch; }
+  .tzbar select { width: 100%; }
+  .barrow { grid-template-columns: 1fr auto; }
+  .barrow .bar { grid-column: 1 / -1; grid-row: 2; }
+}
+
+/* El horario elegido se muestra en el panel izquierdo (escritorio) o sobre el formulario (celular), nunca repetido. */
+.summary { display: none; }
+@media (max-width: 720px) {
+  .summary { display: block; }
+  .info .chosen { display: none; }
+}

@@ -326,6 +326,30 @@ async function rescheduleBooking(token, startValue) {
 
 // ---------- panel de administración ----------
 
+// Números de la pestaña «Inicio». «Este mes» se calcula en tu zona horaria.
+function eventStats() {
+  const now = Date.now();
+  const month = DateTime.now().setZone(getGlobal().timezone).startOf('month');
+  const from = month.toMillis();
+  const to = month.plus({ months: 1 }).toMillis();
+  const one = (sql, ...params) => db.prepare(sql).get(...params);
+  const inMonth = one("SELECT COUNT(*) AS n, COALESCE(SUM(end_utc - start_utc), 0) AS ms FROM bookings WHERE status = 'confirmed' AND start_utc >= ? AND start_utc < ?", from, to);
+  return {
+    monthLabel: month.setLocale('es').toFormat('LLLL yyyy'),
+    upcoming: one("SELECT COUNT(*) AS n FROM bookings WHERE status = 'confirmed' AND start_utc > ?", now).n,
+    week: one("SELECT COUNT(*) AS n FROM bookings WHERE status = 'confirmed' AND start_utc > ? AND start_utc < ?", now, now + 7 * 86_400_000).n,
+    monthCount: inMonth.n,
+    monthHours: Math.round(Number(inMonth.ms) / 360_000) / 10,
+    monthCancelled: one("SELECT COUNT(*) AS n FROM bookings WHERE status = 'cancelled' AND start_utc >= ? AND start_utc < ?", from, to).n,
+    activeEvents: listEvents().filter((e) => e.active).length,
+    next: db.prepare("SELECT * FROM bookings WHERE status = 'confirmed' AND start_utc > ? ORDER BY start_utc LIMIT 5").all(now).map(view),
+    byEvent: db
+      .prepare("SELECT event_title AS title, COUNT(*) AS n FROM bookings WHERE status = 'confirmed' AND start_utc >= ? AND start_utc < ? GROUP BY event_title ORDER BY n DESC")
+      .all(from, to)
+      .map((r) => ({ title: r.title, n: r.n })),
+  };
+}
+
 function adminCookie(req) {
   return /(?:^|;\s*)admin=([^;]+)/.exec(req.headers.cookie ?? '')?.[1] ?? null;
 }
@@ -394,6 +418,8 @@ async function handleAdminApi(req, res, url) {
     case 'POST /api/admin/events/order':
       guard(() => reorderEvents(body.ids));
       return sendJson(res, 200, { ok: true });
+    case 'GET /api/admin/stats':
+      return sendJson(res, 200, eventStats());
     case 'GET /api/admin/bookings': {
       const now = Date.now();
       const rows = db
