@@ -103,7 +103,7 @@ export async function createEvent({ booking, title, ownerTz }) {
     query: { conferenceDataVersion: '1', sendUpdates: 'all' },
     body: {
       summary: `${title} — ${booking.name}`,
-      description: booking.note ? `Nota del visitante:\n${booking.note}` : undefined,
+      description: booking.note ? `Respuestas del formulario:\n${booking.note}` : undefined,
       start: when(booking.start_utc, ownerTz),
       end: when(booking.end_utc, ownerTz),
       attendees: [{ email: booking.email, displayName: booking.name }],

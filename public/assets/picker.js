@@ -1,79 +1,116 @@
-import { api, el, detectTz, dayKey, fmtDayShort, fmtTime } from './common.js';
+import { api, el, detectTz, dayKey, fmtTime, fmtDayLong, fmtMonth } from './common.js';
+
+const WEEKDAYS = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
 
 /**
- * Selector de día y horario, mostrado en la zona horaria del visitante.
- * onSelect(startMs, tz) se llama al elegir un horario.
+ * Calendario mensual + lista de horarios, en la zona horaria del visitante.
+ * onSelect(startMs, tz) se llama al apretar "Siguiente" junto al horario elegido.
  */
 export async function mountPicker(root, { onSelect }) {
-  const state = { tz: detectTz(), day: null, selected: null, data: null };
+  const state = { tz: detectTz(), month: null, day: null, pending: null, slots: [], byDay: new Map() };
+
+  function group() {
+    state.byDay = new Map();
+    for (const ms of state.slots) {
+      const key = dayKey(ms, state.tz);
+      if (!state.byDay.has(key)) state.byDay.set(key, []);
+      state.byDay.get(key).push(ms);
+    }
+  }
 
   async function load() {
     root.replaceChildren(el('p', { class: 'muted' }, 'Cargando horarios…'));
     try {
-      state.data = await api('/api/slots');
+      state.slots = (await api('/api/slots')).slots;
     } catch (err) {
       root.replaceChildren(el('p', { class: 'error' }, err.message));
       return;
     }
+    group();
     state.day = null;
-    state.selected = null;
+    state.pending = null;
+    state.month = [...state.byDay.keys()][0]?.slice(0, 7) ?? null;
     render();
   }
 
   function render() {
-    const { tz, data } = state;
-    const byDay = new Map();
-    for (const ms of data.slots) {
-      const key = dayKey(ms, tz);
-      if (!byDay.has(key)) byDay.set(key, []);
-      byDay.get(key).push(ms);
-    }
-    if (!byDay.has(state.day)) state.day = [...byDay.keys()][0] ?? null;
-
-    const zones = Intl.supportedValuesOf?.('timeZone') ?? [];
-    if (!zones.includes(tz)) zones.unshift(tz);
-    const tzSelect = el(
-      'select',
-      { id: 'tz', 'aria-label': 'Zona horaria', onchange: (e) => { state.tz = e.target.value; render(); } },
-      ...zones.map((z) => el('option', { value: z, selected: z === tz }, z.replaceAll('_', ' '))),
-    );
-
-    if (!byDay.size) {
+    if (!state.byDay.size) {
       root.replaceChildren(el('p', {}, 'No hay horarios disponibles en los próximos días. Volvé a pasar más tarde.'));
       return;
     }
+    const keys = [...state.byDay.keys()];
+    const firstMonth = keys[0].slice(0, 7);
+    const lastMonth = keys.at(-1).slice(0, 7);
+    const [year, month] = state.month.split('-').map(Number);
+    const shift = (delta) => {
+      const d = new Date(Date.UTC(year, month - 1 + delta, 1));
+      state.month = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      render();
+    };
 
-    const days = el(
-      'div',
-      { class: 'days', role: 'tablist' },
-      ...[...byDay].map(([key, list]) =>
+    const cells = [];
+    const offset = (new Date(Date.UTC(year, month - 1, 1)).getUTCDay() + 6) % 7; // semana desde el lunes
+    for (let i = 0; i < offset; i++) cells.push(el('span'));
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    for (let d = 1; d <= daysInMonth; d++) {
+      const key = `${state.month}-${String(d).padStart(2, '0')}`;
+      const avail = state.byDay.has(key);
+      cells.push(
         el('button', {
           type: 'button',
-          class: `chip${key === state.day ? ' active' : ''}`,
-          role: 'tab',
-          'aria-selected': String(key === state.day),
-          onclick: () => { state.day = key; render(); },
-        }, fmtDayShort(list[0], tz)),
-      ),
+          class: `day${avail ? ' avail' : ''}${key === state.day ? ' sel' : ''}`,
+          disabled: !avail,
+          'aria-pressed': String(key === state.day),
+          onclick: () => { state.day = key; state.pending = null; render(); },
+        }, String(d)),
+      );
+    }
+
+    const zones = Intl.supportedValuesOf?.('timeZone') ?? [];
+    if (!zones.includes(state.tz)) zones.unshift(state.tz);
+    const tzSelect = el(
+      'select',
+      {
+        'aria-label': 'Zona horaria',
+        onchange: (e) => { state.tz = e.target.value; group(); state.day = null; state.pending = null; state.month = [...state.byDay.keys()][0]?.slice(0, 7) ?? state.month; render(); },
+      },
+      ...zones.map((z) => el('option', { value: z, selected: z === state.tz }, z.replaceAll('_', ' '))),
     );
 
-    const times = el(
+    const calendar = el(
       'div',
-      { class: 'times' },
-      ...(byDay.get(state.day) ?? []).map((ms) =>
-        el('button', {
-          type: 'button',
-          class: `chip${ms === state.selected ? ' active' : ''}`,
-          onclick: () => { state.selected = ms; render(); onSelect(ms, tz); },
-        }, fmtTime(ms, tz)),
+      { class: 'cal' },
+      el(
+        'div',
+        { class: 'cal-head' },
+        el('button', { type: 'button', class: 'nav', 'aria-label': 'Mes anterior', disabled: state.month <= firstMonth, onclick: () => shift(-1) }, '‹'),
+        el('strong', {}, fmtMonth(year, month)),
+        el('button', { type: 'button', class: 'nav', 'aria-label': 'Mes siguiente', disabled: state.month >= lastMonth, onclick: () => shift(1) }, '›'),
       ),
+      el('div', { class: 'grid' }, ...WEEKDAYS.map((w) => el('span', { class: 'wd' }, w)), ...cells),
+      el('label', { class: 'tzrow' }, el('span', { class: 'muted' }, 'Zona horaria'), tzSelect),
     );
 
-    root.replaceChildren(
-      el('label', { class: 'tzrow' }, el('span', { class: 'muted' }, 'Tu zona horaria'), tzSelect),
-      days,
-      times,
-    );
+    const pick = el('div', { class: 'pick' }, calendar);
+    if (state.day) {
+      const list = state.byDay.get(state.day);
+      pick.append(
+        el(
+          'div',
+          { class: 'times' },
+          el('h3', {}, fmtDayLong(list[0], state.tz)),
+          ...list.map((ms) =>
+            el(
+              'div',
+              { class: `slot${ms === state.pending ? ' open' : ''}` },
+              el('button', { type: 'button', class: 'time', onclick: () => { state.pending = ms; render(); } }, fmtTime(ms, state.tz)),
+              ms === state.pending ? el('button', { type: 'button', class: 'next', onclick: () => onSelect(ms, state.tz) }, 'Siguiente') : null,
+            ),
+          ),
+        ),
+      );
+    }
+    root.replaceChildren(pick);
   }
 
   await load();

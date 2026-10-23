@@ -4,8 +4,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DateTime } from 'luxon';
-import config from '../config.js';
 import db from './db.js';
+import { getSettings, saveSettings, SettingsError } from './settings.js';
 import { generateSlots } from './availability.js';
 import { sign, verify } from './tokens.js';
 import * as google from './google.js';
@@ -16,6 +16,7 @@ const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\
 const EMBED = (process.env.EMBED_ORIGINS ?? '*').trim();
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 const TOKEN_TTL = 90 * 24 * 3_600_000;
+const ADMIN_TTL = 12 * 3_600_000;
 
 sign({ act: 'check', exp: 0 }); // falla al arrancar si falta SIGNING_SECRET
 
@@ -29,12 +30,12 @@ class HttpError extends Error {
 // ---------- disponibilidad ----------
 
 let busyCache = null; // evita llamar a Google en cada visita; las reservas siempre consultan en fresco
-const horizonEnd = (now) => now + (config.horizonDays + 1) * 86_400_000;
 
 async function googleBusy(now, { fresh }) {
   if (!google.isConnected()) return [];
   if (!fresh && busyCache && Date.now() - busyCache.at < 60_000) return busyCache.data;
-  const data = await google.getBusy(now - 86_400_000, horizonEnd(now));
+  const horizonEnd = now + (getSettings().horizonDays + 1) * 86_400_000;
+  const data = await google.getBusy(now - 86_400_000, horizonEnd);
   busyCache = { at: Date.now(), data };
   return data;
 }
@@ -57,7 +58,7 @@ async function availableSlots({ fresh = false, excludeId = '' } = {}) {
     if (fresh) throw new HttpError(503, 'No pude consultar el calendario. Probá de nuevo en un momento.');
     console.error('[google] freeBusy falló, mostrando solo reservas locales:', err.message);
   }
-  return generateSlots(config, now, [...dbBlocked(now, excludeId), ...busy]);
+  return generateSlots(getSettings(), now, [...dbBlocked(now, excludeId), ...busy]);
 }
 
 // ---------- helpers HTTP ----------
@@ -84,21 +85,22 @@ function sendHtml(res, status, html) {
   res.end(html);
 }
 
-function serveFile(res, file) {
+function serveFile(res, file, headers = {}) {
   const full = path.resolve(PUBLIC_DIR, file);
   if (!full.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(full) || !fs.statSync(full).isFile()) {
     throw new HttpError(404, 'No encontrado');
   }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' });
+  res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] ?? 'application/octet-stream', 'Cache-Control': 'no-cache', ...headers });
   fs.createReadStream(full).pipe(res);
 }
 
 async function readJson(req) {
+  if (!req.headers['content-type']?.includes('application/json')) throw new HttpError(415, 'Content-Type debe ser application/json');
   let size = 0;
   const chunks = [];
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 20_000) throw new HttpError(413, 'Solicitud demasiado grande');
+    if (size > 100_000) throw new HttpError(413, 'Solicitud demasiado grande');
     chunks.push(chunk);
   }
   try {
@@ -109,13 +111,20 @@ async function readJson(req) {
 }
 
 const hits = new Map();
-function rateLimit(req) {
+function rateLimit(req, name, max, windowMs) {
   const ip = (process.env.TRUST_PROXY === '1' && req.headers['x-forwarded-for']?.split(',')[0].trim()) || req.socket.remoteAddress;
+  const key = `${name}:${ip}`;
   const now = Date.now();
-  const recent = (hits.get(ip) ?? []).filter((t) => now - t < 3_600_000);
-  if (recent.length >= 10) throw new HttpError(429, 'Demasiados intentos. Probá más tarde.');
+  const recent = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
+  if (recent.length >= max) throw new HttpError(429, 'Demasiados intentos. Probá más tarde.');
   recent.push(now);
-  hits.set(ip, recent);
+  hits.set(key, recent);
+}
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 
 // ---------- reservas ----------
@@ -131,19 +140,35 @@ function bookingFromToken(token) {
   return booking;
 }
 
-const view = (b) => ({
-  id: b.id,
-  name: b.name,
-  email: b.email,
-  note: b.note,
-  tz: b.tz,
-  start: b.start_utc,
-  end: b.end_utc,
-  status: b.status,
-  meetUrl: b.meet_url,
-  title: config.title,
-  ownerName: config.ownerName,
+const publicEvent = (s) => ({
+  title: s.title,
+  description: s.description,
+  location: s.location,
+  ownerName: s.ownerName,
+  slotMinutes: s.slotMinutes,
+  accentColor: s.accentColor,
+  fields: s.fields,
 });
+
+const view = (b) => {
+  const s = getSettings();
+  return {
+    id: b.id,
+    name: b.name,
+    email: b.email,
+    tz: b.tz,
+    start: b.start_utc,
+    end: b.end_utc,
+    status: b.status,
+    meetUrl: b.meet_url,
+    answers: JSON.parse(b.answers || '[]'),
+    title: s.title,
+    ownerName: s.ownerName,
+    location: s.location,
+    accentColor: s.accentColor,
+    confirmationMessage: s.confirmationMessage,
+  };
+};
 
 const isTz = (tz) => typeof tz === 'string' && DateTime.now().setZone(tz).isValid;
 
@@ -153,14 +178,38 @@ function parseStart(value) {
   return ms;
 }
 
+// Valida las respuestas contra las preguntas configuradas; devuelve [{ id, label, value }].
+function parseAnswers(fields, raw) {
+  const answers = [];
+  for (const f of fields) {
+    const given = raw?.[f.id];
+    if (f.type === 'checkbox') {
+      const checked = given === true || given === 'on';
+      if (f.required && !checked) throw new HttpError(400, `Tenés que aceptar «${f.label}».`);
+      answers.push({ id: f.id, label: f.label, value: checked ? 'Sí' : 'No' });
+      continue;
+    }
+    const value = String(given ?? '').trim();
+    if (!value) {
+      if (f.required) throw new HttpError(400, `Completá «${f.label}».`);
+      continue;
+    }
+    if (value.length > (f.type === 'textarea' ? 2000 : 300)) throw new HttpError(400, `«${f.label}» es demasiado largo.`);
+    if (f.type === 'select' && !f.options.includes(value)) throw new HttpError(400, `Elegí una opción válida en «${f.label}».`);
+    answers.push({ id: f.id, label: f.label, value });
+  }
+  return answers;
+}
+
 async function createBooking(body) {
+  const settings = getSettings();
   const name = String(body.name ?? '').trim();
   const email = String(body.email ?? '').trim();
-  const note = String(body.note ?? '').trim();
   if (!name || name.length > 100) throw new HttpError(400, 'Ingresá tu nombre (máx. 100 caracteres).');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) throw new HttpError(400, 'Ingresá un email válido.');
-  if (note.length > 1000) throw new HttpError(400, 'La nota es demasiado larga (máx. 1000).');
-  const tz = isTz(body.tz) ? body.tz : config.timezone;
+  const answers = parseAnswers(settings.fields, body.answers);
+  const note = answers.map((a) => `${a.label}: ${a.value}`).join('\n');
+  const tz = isTz(body.tz) ? body.tz : settings.timezone;
   const start = parseStart(body.start);
 
   const slots = await availableSlots({ fresh: true });
@@ -168,10 +217,10 @@ async function createBooking(body) {
 
   // Sin awaits entre la verificación y el INSERT: en un solo proceso esto es atómico.
   const id = crypto.randomBytes(9).toString('base64url');
-  const end = start + config.slotMinutes * 60_000;
+  const end = start + settings.slotMinutes * 60_000;
   try {
-    db.prepare('INSERT INTO bookings (id, start_utc, end_utc, name, email, note, tz, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-      id, start, end, name, email, note, tz, Date.now(),
+    db.prepare('INSERT INTO bookings (id, start_utc, end_utc, name, email, note, answers, tz, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      id, start, end, name, email, note, JSON.stringify(answers), tz, Date.now(),
     );
   } catch (err) {
     if (/UNIQUE/i.test(err.message)) throw new HttpError(409, 'Ese horario ya no está disponible. Elegí otro.');
@@ -181,7 +230,7 @@ async function createBooking(body) {
   let booking = getBooking(id);
   if (google.isConnected()) {
     try {
-      const ev = await google.createEvent({ booking, title: config.title, ownerTz: config.timezone });
+      const ev = await google.createEvent({ booking, title: settings.title, ownerTz: settings.timezone });
       db.prepare('UPDATE bookings SET google_event_id = ?, meet_url = ? WHERE id = ?').run(ev.id, ev.meetUrl, id);
       booking = getBooking(id);
     } catch (err) {
@@ -194,11 +243,10 @@ async function createBooking(body) {
 
   const token = manageToken(id);
   await notify('confirmed', booking, { manageUrl: manageUrl(token) });
-  return { token };
+  return { token, redirectUrl: settings.redirectUrl || null };
 }
 
-async function cancelBooking(token) {
-  const booking = bookingFromToken(token);
+async function cancelBooking(booking) {
   if (booking.status !== 'confirmed') throw new HttpError(409, 'Esta reserva ya fue cancelada.');
   if (booking.start_utc <= Date.now()) throw new HttpError(409, 'La reunión ya comenzó.');
   db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(booking.id);
@@ -210,7 +258,7 @@ async function cancelBooking(token) {
       console.error('[google] no se pudo borrar el evento:', err.message);
     }
   }
-  await notify('cancelled', getBooking(booking.id), { manageUrl: manageUrl(token) });
+  await notify('cancelled', getBooking(booking.id), { manageUrl: '' });
 }
 
 async function rescheduleBooking(token, startValue) {
@@ -222,7 +270,8 @@ async function rescheduleBooking(token, startValue) {
   const slots = await availableSlots({ fresh: true, excludeId: booking.id });
   if (!slots.includes(start)) throw new HttpError(409, 'Ese horario ya no está disponible. Elegí otro.');
 
-  const end = start + config.slotMinutes * 60_000;
+  const settings = getSettings();
+  const end = start + settings.slotMinutes * 60_000;
   const update = db.prepare('UPDATE bookings SET start_utc = ?, end_utc = ? WHERE id = ?');
   try {
     update.run(start, end, booking.id);
@@ -232,7 +281,7 @@ async function rescheduleBooking(token, startValue) {
   }
   if (booking.google_event_id) {
     try {
-      await google.moveEvent(booking.google_event_id, start, end, config.timezone);
+      await google.moveEvent(booking.google_event_id, start, end, settings.timezone);
     } catch (err) {
       update.run(booking.start_utc, booking.end_utc, booking.id);
       console.error('[google] no se pudo mover el evento:', err.message);
@@ -243,30 +292,108 @@ async function rescheduleBooking(token, startValue) {
   await notify('rescheduled', getBooking(booking.id), { manageUrl: manageUrl(token) });
 }
 
-// ---------- rutas ----------
+// ---------- panel de administración ----------
+
+function adminCookie(req) {
+  return /(?:^|;\s*)admin=([^;]+)/.exec(req.headers.cookie ?? '')?.[1] ?? null;
+}
+
+function requireAdmin(req) {
+  if (!process.env.ADMIN_SECRET) throw new HttpError(404, 'El panel está desactivado: definí ADMIN_SECRET en .env.');
+  if (!verify(adminCookie(req), 'admin')) throw new HttpError(401, 'No autorizado');
+}
+
+const cookie = (value, maxAge) =>
+  `admin=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${BASE_URL.startsWith('https') ? '; Secure' : ''}`;
+
+async function handleAdminApi(req, res, url) {
+  const route = `${req.method} ${url.pathname}`;
+  if (route === 'POST /api/admin/login') {
+    if (!process.env.ADMIN_SECRET) throw new HttpError(404, 'El panel está desactivado: definí ADMIN_SECRET en .env.');
+    rateLimit(req, 'login', 10, 15 * 60_000);
+    const { password } = await readJson(req);
+    if (!safeEqual(password ?? '', process.env.ADMIN_SECRET)) throw new HttpError(401, 'Contraseña incorrecta');
+    res.setHeader('Set-Cookie', cookie(sign({ act: 'admin', exp: Date.now() + ADMIN_TTL }), ADMIN_TTL / 1000));
+    return sendJson(res, 200, { ok: true });
+  }
+  if (route === 'POST /api/admin/logout') {
+    res.setHeader('Set-Cookie', cookie('', 0));
+    return sendJson(res, 200, { ok: true });
+  }
+
+  requireAdmin(req);
+  switch (route) {
+    case 'GET /api/admin/settings':
+      return sendJson(res, 200, {
+        settings: getSettings(),
+        google: { configured: google.isConfigured(), connected: google.isConnected() },
+        smtp: Boolean(process.env.SMTP_HOST),
+      });
+    case 'PUT /api/admin/settings':
+      try {
+        const settings = saveSettings(await readJson(req));
+        busyCache = null;
+        return sendJson(res, 200, { settings });
+      } catch (err) {
+        if (err instanceof SettingsError) throw new HttpError(400, err.message);
+        throw err;
+      }
+    case 'GET /api/admin/bookings': {
+      const now = Date.now();
+      const rows = db
+        .prepare("SELECT * FROM bookings WHERE (status = 'confirmed' AND end_utc > ?) OR (status = 'cancelled' AND created_at > ?) ORDER BY start_utc")
+        .all(now, now - 30 * 86_400_000);
+      return sendJson(res, 200, { bookings: rows.map((b) => ({ ...view(b), id: b.id })) });
+    }
+    case 'POST /api/admin/cancel': {
+      const booking = getBooking((await readJson(req)).id);
+      if (!booking) throw new HttpError(404, 'Reserva no encontrada');
+      await cancelBooking(booking);
+      return sendJson(res, 200, { ok: true });
+    }
+    default:
+      throw new HttpError(404, 'No encontrado');
+  }
+}
+
+async function handleGoogleOAuth(req, res, url) {
+  if (!google.isConfigured()) throw new HttpError(404, 'Google no está configurado en .env');
+  if (url.pathname === '/admin/google/connect') {
+    requireAdmin(req);
+    const state = sign({ act: 'oauth', exp: Date.now() + 10 * 60_000 });
+    res.writeHead(302, { Location: google.authUrl(state) });
+    return res.end();
+  }
+  if (url.pathname === '/admin/google/callback') {
+    if (!verify(url.searchParams.get('state'), 'oauth')) throw new HttpError(400, 'Estado OAuth inválido o vencido. Empezá de nuevo desde el panel.');
+    if (url.searchParams.get('error')) throw new HttpError(400, `Google rechazó el acceso: ${url.searchParams.get('error')}`);
+    await google.exchangeCode(url.searchParams.get('code') ?? '');
+    busyCache = null;
+    return sendHtml(res, 200, '<!doctype html><meta charset="utf-8"><title>Conectado</title><h1>Google Calendar conectado ✅</h1><p><a href="/admin">Volver al panel</a></p>');
+  }
+  throw new HttpError(404, 'No encontrado');
+}
+
+// ---------- rutas públicas ----------
 
 async function handleApi(req, res, url) {
   const route = `${req.method} ${url.pathname}`;
   switch (route) {
+    case 'GET /api/event':
+      return sendJson(res, 200, publicEvent(getSettings()));
     case 'GET /api/slots':
-      return sendJson(res, 200, {
-        slots: await availableSlots(),
-        timezone: config.timezone,
-        slotMinutes: config.slotMinutes,
-        title: config.title,
-        ownerName: config.ownerName,
-      });
+      return sendJson(res, 200, { slots: await availableSlots(), timezone: getSettings().timezone });
     case 'POST /api/book':
-      rateLimit(req);
+      rateLimit(req, 'book', 10, 3_600_000);
       return sendJson(res, 201, await createBooking(await readJson(req)));
     case 'GET /api/booking':
       return sendJson(res, 200, view(bookingFromToken(url.searchParams.get('t'))));
     case 'POST /api/cancel':
-      rateLimit(req);
-      await cancelBooking((await readJson(req)).t);
+      rateLimit(req, 'book', 10, 3_600_000);
+      await cancelBooking(bookingFromToken((await readJson(req)).t));
       return sendJson(res, 200, { ok: true });
     case 'POST /api/reschedule': {
-      rateLimit(req);
+      rateLimit(req, 'book', 10, 3_600_000);
       const body = await readJson(req);
       await rescheduleBooking(body.t, body.start);
       return sendJson(res, 200, { ok: true });
@@ -276,31 +403,7 @@ async function handleApi(req, res, url) {
   }
 }
 
-function safeEqual(a, b) {
-  const x = Buffer.from(String(a));
-  const y = Buffer.from(String(b));
-  return x.length === y.length && crypto.timingSafeEqual(x, y);
-}
-
-async function handleAdmin(req, res, url) {
-  if (!process.env.ADMIN_SECRET || !google.isConfigured()) throw new HttpError(404, 'No encontrado');
-  if (url.pathname === '/admin/google/connect') {
-    if (!safeEqual(url.searchParams.get('key') ?? '', process.env.ADMIN_SECRET)) throw new HttpError(403, 'Clave incorrecta');
-    const state = sign({ act: 'oauth', exp: Date.now() + 10 * 60_000 });
-    res.writeHead(302, { Location: google.authUrl(state) });
-    return res.end();
-  }
-  if (url.pathname === '/admin/google/callback') {
-    if (!verify(url.searchParams.get('state'), 'oauth')) throw new HttpError(400, 'Estado OAuth inválido o vencido. Empezá de nuevo desde /admin/google/connect.');
-    if (url.searchParams.get('error')) throw new HttpError(400, `Google rechazó el acceso: ${url.searchParams.get('error')}`);
-    await google.exchangeCode(url.searchParams.get('code') ?? '');
-    busyCache = null;
-    return sendHtml(res, 200, '<!doctype html><meta charset="utf-8"><title>Conectado</title><h1>Google Calendar conectado ✅</h1><p>Ya podés cerrar esta pestaña.</p>');
-  }
-  throw new HttpError(404, 'No encontrado');
-}
-
-const PAGES = { '/book': 'book.html', '/confirm': 'manage.html', '/manage': 'manage.html', '/embed-example': 'embed-example.html' };
+const PAGES = { '/book': 'book.html', '/confirm': 'manage.html', '/manage': 'manage.html', '/admin': 'admin.html', '/embed-example': 'embed-example.html' };
 
 const server = http.createServer(async (req, res) => {
   setSecurityHeaders(res);
@@ -310,14 +413,18 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(302, { Location: '/book' });
       return res.end();
     }
+    if (url.pathname.startsWith('/api/admin/')) return await handleAdminApi(req, res, url);
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
-    if (url.pathname.startsWith('/admin/google/')) return await handleAdmin(req, res, url);
-    if (req.method === 'GET' && PAGES[url.pathname]) return serveFile(res, PAGES[url.pathname]);
+    if (url.pathname.startsWith('/admin/google/')) return await handleGoogleOAuth(req, res, url);
+    if (req.method === 'GET' && PAGES[url.pathname]) {
+      // El panel nunca debe poder embeberse en otro sitio.
+      return serveFile(res, PAGES[url.pathname], url.pathname === '/admin' ? { 'Content-Security-Policy': "default-src 'self'; frame-ancestors 'none'" } : {});
+    }
     if (req.method === 'GET' && url.pathname.startsWith('/assets/')) return serveFile(res, decodeURIComponent(url.pathname.slice(1)));
     throw new HttpError(404, 'No encontrado');
   } catch (err) {
     const status = err.status ?? 500;
-    if (status >= 500 && !(err instanceof HttpError)) console.error(err);
+    if (!(err instanceof HttpError)) console.error(err);
     const message = err instanceof HttpError ? err.message : 'Error interno';
     if (res.headersSent) return res.end();
     if (new URL(req.url, BASE_URL).pathname.startsWith('/api/')) sendJson(res, status, { error: message });
@@ -327,6 +434,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Reservas en ${BASE_URL}/book`);
-  console.log(`Google Calendar: ${google.isConnected() ? 'conectado' : google.isConfigured() ? 'configurado, falta conectar (/admin/google/connect?key=…)' : 'sin configurar (solo SQLite)'}`);
+  console.log(`Panel: ${process.env.ADMIN_SECRET ? `${BASE_URL}/admin` : 'desactivado (definí ADMIN_SECRET)'}`);
+  console.log(`Google Calendar: ${google.isConnected() ? 'conectado' : google.isConfigured() ? 'configurado, falta conectar desde el panel' : 'sin configurar (solo SQLite)'}`);
   console.log(`SMTP: ${process.env.SMTP_HOST ? process.env.SMTP_HOST : 'sin configurar (los mails solo se registran en consola)'}`);
 });

@@ -38,3 +38,15 @@ export function reportHeight() {
   new ResizeObserver(send).observe(document.body);
   send();
 }
+
+export const fmtDayLong = fmt({ weekday: 'long', day: 'numeric', month: 'long' });
+export const fmtMonth = (year, month) => new Intl.DateTimeFormat('es', { timeZone: 'UTC', month: 'long', year: 'numeric' }).format(Date.UTC(year, month - 1, 1));
+
+// Aplica el color de acento configurado (CSSOM: permitido por la CSP, a diferencia de style="").
+export function applyTheme(hex) {
+  if (!/^#[0-9a-f]{6}$/i.test(hex ?? '')) return;
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const light = (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6;
+  document.documentElement.style.setProperty('--accent', hex);
+  document.documentElement.style.setProperty('--accent-fg', light ? '#111111' : '#ffffff');
+}

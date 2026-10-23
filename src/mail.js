@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import { DateTime } from 'luxon';
-import config from '../config.js';
+import { getSettings } from './settings.js';
 
 let transport;
 function getTransport() {
@@ -44,28 +44,30 @@ const TITLES = {
 };
 
 function layout(heading, rows, links) {
-  const body = rows.map(([k, v]) => `<tr><td style="padding:4px 12px 4px 0;color:#666">${esc(k)}</td><td>${v}</td></tr>`).join('');
+  const body = rows.map(([k, v]) => `<tr><td style="padding:4px 12px 4px 0;color:#666;vertical-align:top">${esc(k)}</td><td>${v}</td></tr>`).join('');
   const actions = links.map(([label, href]) => `<a href="${esc(href)}">${esc(label)}</a>`).join(' · ');
   return `<div style="font-family:system-ui,sans-serif;max-width:520px"><h2>${esc(heading)}</h2><table>${body}</table>${actions ? `<p>${actions}</p>` : ''}</div>`;
 }
 
 const plain = (heading, rows, links) =>
-  [heading, '', ...rows.map(([k, v]) => `${k}: ${v.replace(/<[^>]+>/g, '')}`), '', ...links.map(([l, h]) => `${l}: ${h}`)].join('\n');
+  [heading, '', ...rows.map(([k, v]) => `${k}: ${v.replace(/<br>/g, '\n').replace(/<[^>]+>/g, '')}`), '', ...links.map(([l, h]) => `${l}: ${h}`)].join('\n');
 
 /**
  * kind: 'confirmed' | 'rescheduled' | 'cancelled'
  * Manda un mail al visitante (en su zona horaria) y otro al dueño.
  */
 export async function notify(kind, booking, { manageUrl }) {
+  const settings = getSettings();
   const [subj, visitorHeading] = TITLES[kind];
   const meet = booking.meet_url ? [['Google Meet', `<a href="${esc(booking.meet_url)}">${esc(booking.meet_url)}</a>`]] : [];
+  const answers = JSON.parse(booking.answers || '[]').map((a) => [a.label, esc(a.value).replace(/\n/g, '<br>')]);
 
-  const visitorRows = [['Cuándo', esc(whenText(booking, booking.tz))], ['Con', esc(config.ownerName)], ...(kind === 'cancelled' ? [] : meet)];
+  const visitorRows = [['Cuándo', esc(whenText(booking, booking.tz))], ['Con', esc(settings.ownerName)], ...(kind === 'cancelled' ? [] : meet)];
   const visitorLinks = kind === 'cancelled' ? [] : [['Cancelar o reprogramar', manageUrl]];
   const mails = [
     {
       to: booking.email,
-      subject: `${subj}: ${config.title}`,
+      subject: `${subj}: ${oneLine(settings.title)}`,
       html: layout(visitorHeading, visitorRows, visitorLinks),
       text: plain(visitorHeading, visitorRows, visitorLinks),
     },
@@ -73,9 +75,9 @@ export async function notify(kind, booking, { manageUrl }) {
 
   if (process.env.OWNER_EMAIL) {
     const ownerRows = [
-      ['Cuándo', esc(whenText(booking, config.timezone))],
+      ['Cuándo', esc(whenText(booking, settings.timezone))],
       ['Quién', `${esc(booking.name)} &lt;${esc(booking.email)}&gt;`],
-      ['Nota', booking.note ? esc(booking.note).replace(/\n/g, '<br>') : '—'],
+      ...answers,
       ...(kind === 'cancelled' ? [] : meet),
     ];
     mails.push({

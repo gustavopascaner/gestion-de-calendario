@@ -1,4 +1,4 @@
-import { $, el, api, fmtLong, reportHeight } from './common.js';
+import { $, el, api, fmtLong, applyTheme, reportHeight } from './common.js';
 import { mountPicker } from './picker.js';
 
 const root = $('#content');
@@ -14,6 +14,7 @@ async function render() {
     return;
   }
 
+  applyTheme(b.accentColor);
   const when = `${fmtLong(b.start, b.tz)} (${b.tz.replaceAll('_', ' ')})`;
   const active = b.status === 'confirmed' && b.start > Date.now();
   const heading = b.status === 'cancelled' ? 'Reserva cancelada' : justBooked ? '¡Reserva confirmada!' : 'Tu reserva';
@@ -24,10 +25,17 @@ async function render() {
     el('dt', {}, 'Reunión'), el('dd', {}, `${b.title} con ${b.ownerName}`),
     el('dt', {}, 'Cuándo'), el('dd', {}, when),
     el('dt', {}, 'Invitado'), el('dd', {}, `${b.name} · ${b.email}`),
+    ...(b.location && b.status === 'confirmed' && !b.meetUrl ? [el('dt', {}, 'Dónde'), el('dd', {}, b.location)] : []),
     ...(b.meetUrl && b.status === 'confirmed' ? [el('dt', {}, 'Google Meet'), el('dd', {}, el('a', { href: b.meetUrl, target: '_blank', rel: 'noopener' }, b.meetUrl))] : []),
+    ...b.answers.flatMap((a) => [el('dt', {}, a.label), el('dd', {}, a.value)]),
   );
 
-  const status = el('p', { class: 'muted' }, justBooked && active ? 'Te enviamos un email con los detalles y el link para cancelar o reprogramar.' : '');
+  const status = el(
+    'div',
+    {},
+    justBooked && active ? el('p', { class: 'muted' }, 'Te enviamos un email con los detalles y el link para cancelar o reprogramar.') : null,
+    justBooked && active && b.confirmationMessage ? el('p', { class: 'notice' }, b.confirmationMessage) : null,
+  );
   const message = el('p', { role: 'alert' });
   const actions = el('div', { class: 'actions' });
 

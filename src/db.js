@@ -30,6 +30,13 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `);
 
+// Respuestas del formulario configurable: [{ id, label, value }] en JSON.
+try {
+  db.exec("ALTER TABLE bookings ADD COLUMN answers TEXT NOT NULL DEFAULT '[]'");
+} catch {
+  // la columna ya existe
+}
+
 export const getKv = (key) => db.prepare('SELECT value FROM kv WHERE key = ?').get(key)?.value ?? null;
 export const setKv = (key, value) =>
   db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
