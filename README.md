@@ -96,3 +96,11 @@ Un único proceso: `npm start` detrás de HTTPS (Caddy/nginx) con `BASE_URL` pú
 | `public/` | front en HTML/JS vanilla, sin build |
 
 Los links de cancelar/reprogramar llevan un token firmado; siguen siendo válidos tras reprogramar y dejan de permitir cambios una vez comenzada la reunión.
+
+## Despliegue en Easypanel
+
+1. **Create → App**, fuente: tu repo de GitHub (rama `main`); el build usa el `Dockerfile`.
+2. **Mounts → Volume**: montar un volumen en `/app/data` (ahí vive SQLite; sin esto se pierden las reservas en cada deploy).
+3. **Domains**: tu dominio, puerto `3000`, HTTPS activado.
+4. **Environment**: pegar las variables de [.env.example](.env.example) (como mínimo `BASE_URL`, `TRUST_PROXY=1`, `SIGNING_SECRET`, `ADMIN_SECRET`).
+5. **Deploy**, y entrar a `/admin`.
