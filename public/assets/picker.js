@@ -95,7 +95,7 @@ export async function mountPicker(root, { slug, onSelect }) {
       'div',
       { class: 'tzbar' },
       el('span', {}, 'Horarios en hora de ', el('strong', {}, tzLabel(state.tz))),
-      el('label', { class: 'muted' }, 'Cambiar zona: ', tzSelect),
+      tzSelect,
     );
 
     const pick = el('div', { class: 'pick' }, calendar);
