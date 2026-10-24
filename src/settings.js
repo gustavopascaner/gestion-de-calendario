@@ -21,6 +21,7 @@ export const DEFAULT_EVENT = {
   description: '',
   location: 'Google Meet',
   slotMinutes: config.slotMinutes,
+  stepMinutes: 0, // cada cuánto se ofrecen horarios de inicio (0 = igual a la duración)
   bufferMinutes: config.bufferMinutes,
   minNoticeHours: config.minNoticeHours,
   horizonDays: config.horizonDays,
@@ -163,6 +164,7 @@ export function validateEvent(input) {
     description: text(input.description, 1000, 'Descripción'),
     location: text(input.location, 100, 'Ubicación'),
     slotMinutes: int(input.slotMinutes, 5, 480, 'Duración'),
+    stepMinutes: int(input.stepMinutes ?? 0, 0, 480, 'Intervalo de horarios'),
     bufferMinutes: int(input.bufferMinutes, 0, 240, 'Descanso entre reuniones'),
     minNoticeHours: int(input.minNoticeHours, 0, 720, 'Antelación mínima'),
     horizonDays: int(input.horizonDays, 1, 90, 'Días hacia adelante'),

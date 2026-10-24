@@ -195,6 +195,7 @@ function panelDetalles() {
       'div',
       { class: 'row' },
       field('Duración (min)', bound(S, 'input', 'slotMinutes', { type: 'number', min: '5', max: '480' }, { number: true })),
+      field('Mostrar horarios de inicio cada (min, 0 = según la duración)', bound(S, 'input', 'stepMinutes', { type: 'number', min: '0', max: '480' }, { number: true })),
       field('Descanso entre reuniones (min)', bound(S, 'input', 'bufferMinutes', { type: 'number', min: '0', max: '240' }, { number: true })),
       field('Antelación mínima (horas)', bound(S, 'input', 'minNoticeHours', { type: 'number', min: '0', max: '720' }, { number: true })),
       field('Días hacia adelante', bound(S, 'input', 'horizonDays', { type: 'number', min: '1', max: '90' }, { number: true })),

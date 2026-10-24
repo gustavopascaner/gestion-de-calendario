@@ -10,6 +10,7 @@ const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 export function generateSlots(cfg, nowMs, blocked = []) {
   const zone = cfg.timezone;
   const slotMs = cfg.slotMinutes * 60_000;
+  const stepMs = (cfg.stepMinutes || cfg.slotMinutes) * 60_000; // 0 = cada tanto como dura la reunión
   const bufferMs = cfg.bufferMinutes * 60_000;
   const earliest = nowMs + cfg.minNoticeHours * 3_600_000;
   const today = DateTime.fromMillis(nowMs, { zone }).startOf('day');
@@ -22,7 +23,7 @@ export function generateSlots(cfg, nowMs, blocked = []) {
       const [fh, fm] = from.split(':').map(Number);
       const [th, tm] = to.split(':').map(Number);
       const end = day.set({ hour: th, minute: tm }).toMillis();
-      for (let t = day.set({ hour: fh, minute: fm }).toMillis(); t + slotMs <= end; t += slotMs) {
+      for (let t = day.set({ hour: fh, minute: fm }).toMillis(); t + slotMs <= end; t += stepMs) {
         if (t < earliest) continue;
         const clash = blocked.some((b) => t < b.end + bufferMs && t + slotMs > b.start - bufferMs);
         if (!clash) slots.push(t);

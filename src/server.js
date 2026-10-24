@@ -223,10 +223,13 @@ function parseAnswers(fields, raw) {
     }
     if (value.length > (f.type === 'textarea' ? 2000 : 300)) throw new HttpError(400, `«${f.label}» es demasiado largo.`);
     if (f.type === 'select' && !f.options.includes(value)) throw new HttpError(400, `Elegí una opción válida en «${f.label}».`);
+    if (f.type === 'tel' && !isPhone(value)) throw new HttpError(400, `Ingresá un teléfono válido en «${f.label}».`);
     answers.push({ id: f.id, label: f.label, value });
   }
   return answers;
 }
+
+const isPhone = (v) => /^\+?[0-9 ()\-.]{7,25}$/.test(v) && v.replace(/\D/g, '').length >= 7 && v.replace(/\D/g, '').length <= 15;
 
 async function createBooking(body) {
   const event = activeEvent(body.slug);

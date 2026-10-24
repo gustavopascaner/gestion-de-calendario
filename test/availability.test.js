@@ -39,3 +39,8 @@ test('un evento ocupado de varias horas bloquea todo el rango', () => {
   const slots = generateSlots(cfg, now, blocked);
   assert.ok(!slots.some((s) => DateTime.fromMillis(s, { zone }).day === 20));
 });
+
+test('stepMinutes ofrece inicios más seguidos que la duración', () => {
+  const slots = generateSlots({ ...cfg, stepMinutes: 15, bufferMinutes: 0 }, now);
+  assert.equal(slots[1] - slots[0], 15 * 60_000);
+});

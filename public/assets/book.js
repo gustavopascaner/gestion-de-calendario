@@ -106,7 +106,7 @@ async function showEvent(slug, hasList) {
     if (f.type === 'select') {
       return el('select', common, el('option', { value: '' }, 'Elegí una opción…'), ...f.options.map((o) => el('option', { value: o }, o)));
     }
-    return el('input', { ...common, type: f.type === 'tel' ? 'tel' : 'text', maxlength: '300', placeholder: f.placeholder || false });
+    return el('input', { ...common, type: f.type === 'tel' ? 'tel' : 'text', ...(f.type === 'tel' ? { inputmode: 'tel', autocomplete: 'tel', pattern: '\\+?[0-9 ()\\-.]{7,25}', title: 'Ingresá un teléfono válido, por ejemplo +54 9 11 1234-5678' } : {}), maxlength: '300', placeholder: f.placeholder || false });
   }
 
   function buildForm() {
@@ -157,7 +157,7 @@ async function showEvent(slug, hasList) {
           : el('label', {}, el('span', { class: f.required ? 'req' : '' }, f.label), fieldControl(f)),
       ),
       error,
-      el('div', { class: 'actions' }, submit, el('button', { type: 'button', onclick: goPick }, 'Cambiar fecha u hora')),
+      el('div', { class: 'actions' }, submit),
     );
 
     function saveDraft() {

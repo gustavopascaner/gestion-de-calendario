@@ -137,8 +137,9 @@ test('flujo completo: reservar → agenda compartida → reprogramar → cancela
 
   // validaciones
   assert.equal((await api('/api/book', { method: 'POST', body: { slug: 'llamada-corta', name: 'Ana', email: 'ana@example.com', start, answers: {} } })).status, 400); // falta el WhatsApp obligatorio
-  assert.equal((await api('/api/book', { method: 'POST', body: { slug: 'llamada-corta', name: 'Ana', email: 'no-es-email', start, answers: { [fieldId]: '1' } } })).status, 400);
-  assert.equal((await api('/api/book', { method: 'POST', body: { slug: 'llamada-corta', name: 'Ana', email: 'ana@example.com', start: start + 1000, answers: { [fieldId]: '1' } } })).status, 409); // horario que no existe
+  assert.equal((await api('/api/book', { method: 'POST', body: { slug: 'llamada-corta', name: 'Ana', email: 'ana@example.com', start, answers: { [fieldId]: 'hola' } } })).status, 400); // teléfono inválido
+  assert.equal((await api('/api/book', { method: 'POST', body: { slug: 'llamada-corta', name: 'Ana', email: 'no-es-email', start, answers: { [fieldId]: '1155551234' } } })).status, 400);
+  assert.equal((await api('/api/book', { method: 'POST', body: { slug: 'llamada-corta', name: 'Ana', email: 'ana@example.com', start: start + 1000, answers: { [fieldId]: '1155551234' } } })).status, 409); // horario que no existe
 
   const booked = await api('/api/book', {
     method: 'POST',
@@ -158,7 +159,7 @@ test('flujo completo: reservar → agenda compartida → reprogramar → cancela
   assert.deepEqual(view.answers.map((a) => a.value), ['+34 600 000 000']);
 
   // no se puede reservar dos veces el mismo horario, y la agenda se comparte entre eventos
-  assert.equal((await api('/api/book', { method: 'POST', body: { slug: 'llamada-corta', name: 'Bob', email: 'bob@example.com', start, answers: { [fieldId]: '1' } } })).status, 409);
+  assert.equal((await api('/api/book', { method: 'POST', body: { slug: 'llamada-corta', name: 'Bob', email: 'bob@example.com', start, answers: { [fieldId]: '1155551234' } } })).status, 409);
   const other = (await api('/api/slots?slug=reunion')).data.slots;
   assert.ok(!other.some((s) => s < start + 15 * 60_000 && s + 30 * 60_000 > start), 'el otro evento debería bloquear ese horario');
 
