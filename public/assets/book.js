@@ -39,7 +39,7 @@ function showList(ownerName, events) {
   );
 }
 
-async function showEvent(slug, hasList) {
+async function showEvent(slug) {
   let event;
   try {
     event = await api(`/api/event?slug=${encodeURIComponent(slug)}`);
@@ -60,7 +60,6 @@ async function showEvent(slug, hasList) {
   function renderInfo() {
     info.replaceChildren(
       ...[
-        hasList && el('a', { class: 'back', href: '/book' }, '← Todos los eventos'),
         el('p', { class: 'owner' }, event.ownerName),
         el('h1', {}, event.title),
         el('p', { class: 'meta' }, `${event.slotMinutes} min`),
@@ -193,9 +192,9 @@ async function showEvent(slug, hasList) {
 
 async function main() {
   const { ownerName, events } = await api('/api/events');
-  if (slugFromPath) await showEvent(slugFromPath, events.length > 1);
+  if (slugFromPath) await showEvent(slugFromPath);
   else if (events.length === 0) showMessage('Por ahora no hay eventos disponibles para reservar.');
-  else if (events.length === 1) await showEvent(events[0].slug, false);
+  else if (events.length === 1) await showEvent(events[0].slug);
   else showList(ownerName, events);
   reportHeight();
 }

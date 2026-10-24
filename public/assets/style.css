@@ -10,8 +10,9 @@
   --tint: color-mix(in srgb, var(--accent) 14%, transparent);
   color-scheme: light dark;
 }
+:root.light { color-scheme: light; } /* páginas públicas: siempre claras */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not(.light) {
     --bg: #14141a;
     --fg: #ececf0;
     --muted: #9a9aa6;
@@ -155,7 +156,6 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--bord
 .eventrow { display: grid; gap: 2px; padding: 14px 16px; margin: 10px 0; border: 1px solid var(--border); border-left: 5px solid var(--accent); border-radius: 10px; color: var(--fg); text-decoration: none; word-break: normal; }
 .eventrow:hover { background: var(--surface); }
 .eventrow .desc { font-size: 0.9rem; color: var(--muted); }
-.back { display: inline-block; margin-bottom: 14px; font-size: 0.9rem; text-decoration: none; }
 [hidden] { display: none !important; }
 
 /* ---------- panel: lista de eventos ---------- */
