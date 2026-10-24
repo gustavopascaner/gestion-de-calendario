@@ -162,7 +162,7 @@ function activeEvent(slug) {
 
 const summary = (e) => ({ slug: e.slug, title: e.title, description: e.description, location: e.location, slotMinutes: e.slotMinutes, accentColor: e.accentColor });
 const pixelFor = (e) => (e.pixelEnabled && getGlobal().pixelId ? { id: getGlobal().pixelId, event: e.pixelEvent || 'Schedule' } : null);
-const publicEvent = (e) => ({ ...summary(e), ownerName: getGlobal().ownerName, fields: e.fields, pixel: pixelFor(e) });
+const publicEvent = (e) => ({ ...summary(e), ownerName: getGlobal().ownerName, fields: e.fields, showHeader: e.showHeader !== false, pixel: pixelFor(e) });
 
 const view = (b) => {
   const event = getEvent(b.event_type_id);

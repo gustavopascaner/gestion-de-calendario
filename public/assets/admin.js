@@ -284,6 +284,7 @@ function panelApariencia() {
   return el(
     'div',
     { class: 'panel' },
+    el('label', { class: 'check' }, el('input', { type: 'checkbox', checked: S.showHeader !== false, onchange: (e) => { S.showHeader = e.target.checked; markDirty(); } }), 'Mostrar el encabezado (tu nombre, título, duración y ubicación)'),
     field('Color principal', color, 'Botones, días disponibles y enlaces de la página de este evento.'),
     field('Mensaje de confirmación', bound(S, 'textarea', 'confirmationMessage', { rows: '3', maxlength: '500' }), 'Se muestra al visitante después de reservar (p. ej. instrucciones para prepararse).'),
     field('Redirigir a otra página tras reservar', bound(S, 'input', 'redirectUrl', { type: 'url', placeholder: 'https://tusitio.com/gracias' }), 'Opcional. Si lo completás, no se muestra la página de confirmación y el visitante va a esta URL. Los mails se envían igual.'),

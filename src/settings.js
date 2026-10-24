@@ -29,6 +29,7 @@ export const DEFAULT_EVENT = {
   accentColor: '#2563eb',
   confirmationMessage: '',
   redirectUrl: '',
+  showHeader: true, // mostrar nombre, título, duración y ubicación en el panel izquierdo de la página de reservas
   pixelEnabled: false, // enviar el evento de conversión al pixel al confirmarse una reserva
   pixelEvent: 'Schedule',
   fields: [{ id: 'note', label: 'Nota (opcional)', type: 'textarea', required: false, options: [], placeholder: '¿De qué querés hablar?' }],
@@ -187,6 +188,7 @@ export function validateEvent(input) {
     accentColor: input.accentColor.toLowerCase(),
     confirmationMessage: text(input.confirmationMessage, 500, 'Mensaje de confirmación'),
     redirectUrl,
+    showHeader: input.showHeader !== false,
     pixelEnabled: input.pixelEnabled === true,
     pixelEvent: validatePixelEvent(input.pixelEvent),
     fields: validateFields(input.fields ?? []),

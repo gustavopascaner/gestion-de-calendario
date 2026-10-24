@@ -60,16 +60,20 @@ async function showEvent(slug) {
   stage.replaceChildren(steps, pickerBox, formBox);
 
   function renderInfo() {
+    const header = event.showHeader !== false;
     info.replaceChildren(
       ...[
-        el('p', { class: 'owner' }, event.ownerName),
-        el('h1', {}, event.title),
-        el('p', { class: 'meta' }, `${event.slotMinutes} min`),
-        event.location && el('p', { class: 'meta' }, event.location),
+        header && el('p', { class: 'owner' }, event.ownerName),
+        header && el('h1', {}, event.title),
+        header && el('p', { class: 'meta' }, `${event.slotMinutes} min`),
+        header && event.location && el('p', { class: 'meta' }, event.location),
         choice && el('p', { class: 'chosen' }, `${fmtLong(choice.ms, choice.tz)} · ${tzLabel(choice.tz)}`),
         event.description && el('p', { class: 'desc' }, event.description),
       ].filter(Boolean),
     );
+    // Sin encabezado ni nada que mostrar, el panel izquierdo desaparece y el calendario ocupa todo el ancho.
+    info.hidden = !info.children.length;
+    card.classList.toggle('single', info.hidden);
   }
 
   function renderSteps(active) {
