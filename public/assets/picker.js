@@ -90,7 +90,7 @@ export async function mountPicker(root, { slug, onSelect }) {
       el('div', { class: 'grid' }, ...WEEKDAYS.map((w) => el('span', { class: 'wd' }, w)), ...cells),
     );
 
-    // Siempre visible arriba: en qué hora se muestran los horarios (detectada del navegador, se puede cambiar).
+    // Al pie del selector: en qué hora se muestran los horarios (detectada del navegador, se puede cambiar).
     const tzbar = el(
       'div',
       { class: 'tzbar' },
@@ -118,7 +118,7 @@ export async function mountPicker(root, { slug, onSelect }) {
         ),
       );
     }
-    root.replaceChildren(tzbar, pick);
+    root.replaceChildren(pick, tzbar);
 
     // En pantallas angostas la lista de horarios queda debajo del calendario: al elegir un día, mostrarla.
     if (state.revealTimes) {

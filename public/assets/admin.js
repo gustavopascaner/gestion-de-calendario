@@ -287,6 +287,11 @@ function panelApariencia() {
     field('Color principal', color, 'Botones, días disponibles y enlaces de la página de este evento.'),
     field('Mensaje de confirmación', bound(S, 'textarea', 'confirmationMessage', { rows: '3', maxlength: '500' }), 'Se muestra al visitante después de reservar (p. ej. instrucciones para prepararse).'),
     field('Redirigir a otra página tras reservar', bound(S, 'input', 'redirectUrl', { type: 'url', placeholder: 'https://tusitio.com/gracias' }), 'Opcional. Si lo completás, no se muestra la página de confirmación y el visitante va a esta URL. Los mails se envían igual.'),
+    el('h2', {}, 'Evento de conversión (Meta Pixel)'),
+    G.pixelId
+      ? el('label', { class: 'check' }, el('input', { type: 'checkbox', checked: S.pixelEnabled === true, onchange: (e) => { S.pixelEnabled = e.target.checked; markDirty(); } }), `Enviar el evento al pixel ${G.pixelId} cuando se confirma una reserva de este tipo de evento`)
+      : el('p', { class: 'muted' }, 'Primero cargá el ID del pixel en «General».'),
+    field('Nombre del evento', bound(S, 'input', 'pixelEvent', { maxlength: '50', placeholder: 'Schedule' }), 'Evento estándar de Meta (Schedule, Lead, CompleteRegistration…) o uno personalizado. Se envía al confirmar la reserva.'),
   );
 }
 
@@ -301,6 +306,7 @@ function panelGeneral() {
     el('p', { class: 'muted' }, 'Ajustes compartidos por todos los tipos de evento.'),
     field('Tu nombre', bound(G, 'input', 'ownerName', { maxlength: '100' })),
     field('Tu zona horaria', tzSelect(G), 'Los horarios de cada evento están escritos en esta zona.'),
+    field('ID del Meta Pixel', bound(G, 'input', 'pixelId', { inputmode: 'numeric', maxlength: '20', placeholder: '123456789012345' }), 'Opcional. Después, en cada tipo de evento (pestaña «Apariencia») elegís si manda o no el evento de conversión.'),
   );
 }
 
@@ -422,7 +428,7 @@ function panelIntegraciones() {
     try {
       const res = await api('/api/admin/global', {
         method: 'PUT',
-        body: { ownerName: G.ownerName, timezone: G.timezone, webhookUrl: W.url, webhookSecret: W.secret, clearWebhookSecret: W.clear },
+        body: { ownerName: G.ownerName, timezone: G.timezone, pixelId: G.pixelId, webhookUrl: W.url, webhookSecret: W.secret, clearWebhookSecret: W.clear },
       });
       G = res.global;
       meta.deliveries = res.deliveries;

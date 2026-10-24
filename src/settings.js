@@ -12,7 +12,7 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 // Valores iniciales: salen de config.js. Lo que se guarda desde /admin tiene prioridad.
-export const DEFAULT_GLOBAL = { ownerName: config.ownerName, timezone: config.timezone, webhookUrl: '', webhookSecret: '' };
+export const DEFAULT_GLOBAL = { ownerName: config.ownerName, timezone: config.timezone, webhookUrl: '', webhookSecret: '', pixelId: '' };
 
 export const DEFAULT_EVENT = {
   slug: 'reunion',
@@ -29,6 +29,8 @@ export const DEFAULT_EVENT = {
   accentColor: '#2563eb',
   confirmationMessage: '',
   redirectUrl: '',
+  pixelEnabled: false, // enviar el evento de conversión al pixel al confirmarse una reserva
+  pixelEvent: 'Schedule',
   fields: [{ id: 'note', label: 'Nota (opcional)', type: 'textarea', required: false, options: [], placeholder: '¿De qué querés hablar?' }],
 };
 
@@ -97,6 +99,12 @@ const checkTz = (tz) => {
 
 // ---------- ajustes generales (compartidos por todos los eventos) ----------
 
+function validatePixelId(value) {
+  const id = String(value ?? '').trim();
+  if (id && !/^\d{8,20}$/.test(id)) throw new SettingsError('El ID del pixel son solo números (entre 8 y 20 dígitos).');
+  return id;
+}
+
 export function validateGlobal(input) {
   if (!input || typeof input !== 'object') throw new SettingsError('Datos inválidos.');
   let webhookUrl = text(input.webhookUrl, 500, 'URL del webhook');
@@ -115,6 +123,7 @@ export function validateGlobal(input) {
     timezone: checkTz(input.timezone),
     webhookUrl,
     webhookSecret: text(input.webhookSecret, 200, 'Secreto del webhook'),
+    pixelId: validatePixelId(input.pixelId),
   };
 }
 
@@ -135,6 +144,12 @@ export function saveGlobal(input) {
 }
 
 // ---------- tipos de evento ----------
+
+function validatePixelEvent(value) {
+  const name = String(value ?? '').trim() || DEFAULT_EVENT.pixelEvent;
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,49}$/.test(name)) throw new SettingsError('El nombre del evento del pixel solo admite letras, números y guion bajo (p. ej. Schedule, Lead).');
+  return name;
+}
 
 export function validateEvent(input) {
   if (!input || typeof input !== 'object') throw new SettingsError('Datos inválidos.');
@@ -172,6 +187,8 @@ export function validateEvent(input) {
     accentColor: input.accentColor.toLowerCase(),
     confirmationMessage: text(input.confirmationMessage, 500, 'Mensaje de confirmación'),
     redirectUrl,
+    pixelEnabled: input.pixelEnabled === true,
+    pixelEvent: validatePixelEvent(input.pixelEvent),
     fields: validateFields(input.fields ?? []),
   };
 }

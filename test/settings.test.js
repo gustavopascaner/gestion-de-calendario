@@ -74,3 +74,11 @@ test('ABM de eventos: crea con slug único, duplica, ordena y protege los que ti
   events.deleteEvent(copy.id);
   assert.equal(events.getEvent(copy.id), null);
 });
+
+test('pixel: ID numérico y nombre de evento válidos', () => {
+  assert.equal(validateGlobal({ ownerName: 'Gus', timezone: 'America/Argentina/Buenos_Aires', pixelId: ' 123456789012345 ' }).pixelId, '123456789012345');
+  assert.throws(() => validateGlobal({ ownerName: 'Gus', timezone: 'America/Argentina/Buenos_Aires', pixelId: 'abc' }), SettingsError);
+  assert.equal(validateEvent({ ...base(), pixelEnabled: true }).pixelEnabled, true);
+  assert.equal(validateEvent(base()).pixelEvent, 'Schedule');
+  assert.throws(() => validateEvent({ ...base(), pixelEvent: 'mal nombre!' }), SettingsError);
+});

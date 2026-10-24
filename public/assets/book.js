@@ -1,5 +1,6 @@
 import { $, el, api, fmtLong, applyTheme, tzLabel, reportHeight } from './common.js';
 import { mountPicker } from './picker.js';
+import { initPixel, trackPixel } from './pixel.js';
 
 const card = $('.card');
 const info = $('#info');
@@ -48,6 +49,7 @@ async function showEvent(slug) {
   }
   applyTheme(event.accentColor);
   document.title = `${event.title} · ${event.ownerName}`;
+  if (event.pixel) initPixel(event.pixel.id);
 
   let choice = null; // { ms, tz } del horario elegido
   let draft = {}; // lo que el visitante ya escribió, para no perderlo al ir y venir entre pasos
@@ -129,6 +131,7 @@ async function showEvent(slug) {
               method: 'POST',
               body: { slug, name: data.get('name'), email: data.get('email'), answers, tracking, start: choice.ms, tz: choice.tz },
             });
+            if (event.pixel) await trackPixel(event.pixel.event, { content_name: event.title });
             if (redirectUrl) {
               try { window.top.location.href = redirectUrl; } catch { location.href = redirectUrl; }
             } else {

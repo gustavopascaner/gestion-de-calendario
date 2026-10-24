@@ -83,7 +83,7 @@ function setSecurityHeaders(res) {
   const ancestors = EMBED === '*' ? '*' : ["'self'", ...EMBED.split(/[\s,]+/).filter(Boolean)].join(' ');
   res.setHeader(
     'Content-Security-Policy',
-    `default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors ${ancestors}`,
+    `default-src 'self'; script-src 'self' https://connect.facebook.net; img-src 'self' data: https://www.facebook.com; connect-src 'self' https://www.facebook.com https://connect.facebook.net; base-uri 'none'; form-action 'self'; frame-ancestors ${ancestors}`,
   );
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
@@ -161,7 +161,8 @@ function activeEvent(slug) {
 }
 
 const summary = (e) => ({ slug: e.slug, title: e.title, description: e.description, location: e.location, slotMinutes: e.slotMinutes, accentColor: e.accentColor });
-const publicEvent = (e) => ({ ...summary(e), ownerName: getGlobal().ownerName, fields: e.fields });
+const pixelFor = (e) => (e.pixelEnabled && getGlobal().pixelId ? { id: getGlobal().pixelId, event: e.pixelEvent || 'Schedule' } : null);
+const publicEvent = (e) => ({ ...summary(e), ownerName: getGlobal().ownerName, fields: e.fields, pixel: pixelFor(e) });
 
 const view = (b) => {
   const event = getEvent(b.event_type_id);
