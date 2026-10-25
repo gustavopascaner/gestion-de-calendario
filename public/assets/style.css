@@ -61,7 +61,7 @@ a { color: var(--accent); word-break: break-all; }
   /* En iframe y celular: sin caja, el formulario queda directo sobre la página. */
   .embedded body { padding: 0; }
   .embedded .card { border: 0; border-radius: 0; box-shadow: none; }
-  .embedded .info, .embedded .stage { padding-left: 0; padding-right: 0; }
+  .embedded .info, .embedded .stage { padding-left: 10px; padding-right: 10px; }
 }
 
 /* ---------- calendario ---------- */
