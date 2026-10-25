@@ -34,6 +34,7 @@ export const dayKey = (ms, tz) => new Intl.DateTimeFormat('en-CA', { timeZone: t
 // Si la página está dentro de un iframe, avisa a la landing su altura para que pueda ajustarlo.
 export function reportHeight() {
   if (window.parent === window) return;
+  document.documentElement.classList.add('embedded');
   const send = () => window.parent.postMessage({ type: 'booking:height', height: document.documentElement.scrollHeight }, '*');
   new ResizeObserver(send).observe(document.body);
   send();
