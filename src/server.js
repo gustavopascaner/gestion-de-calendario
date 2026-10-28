@@ -61,9 +61,67 @@ function dbBlocked(now, excludeId = '') {
     .map((r) => ({ start: r.start, end: r.end }));
 }
 
+// Lo que hagas en Google Calendar con el evento de una reserva futura se refleja en la app:
+// - si lo borrás, la reserva queda cancelada;
+// - si lo movés, la reserva se reprograma a ese horario;
+// - si el invitado rechaza la invitación, la reserva queda cancelada y se borra el evento
+//   (sin avisarle: ya dijo que no), para que el horario vuelva a ofrecerse.
+// Avisa al webhook en cada caso. No manda mails: Google ya avisa al invitado de lo que hagas
+// en Calendar y a vos de que rechazó.
+let syncedAt = 0;
+
+async function syncFromGoogle({ fresh = false } = {}) {
+  if (!google.isConnected() || (!fresh && Date.now() - syncedAt < 60_000)) return;
+  syncedAt = Date.now();
+  const rows = db
+    .prepare("SELECT * FROM bookings WHERE status = 'confirmed' AND start_utc > ? AND google_event_id IS NOT NULL")
+    .all(Date.now());
+  if (!rows.length) return;
+  let states;
+  try {
+    states = await google.eventStates(rows.map((r) => r.google_event_id));
+  } catch (err) {
+    console.error('[google] no pude revisar los eventos de las reservas:', err.message);
+    return;
+  }
+  const cancel = db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ? AND status = 'confirmed'");
+  const move = db.prepare("UPDATE bookings SET start_utc = ?, end_utc = ? WHERE id = ? AND status = 'confirmed' AND start_utc = ?");
+  for (const b of rows) {
+    const ev = states.get(b.google_event_id);
+    const declined = ev?.declined.includes(b.email.toLowerCase());
+    if (!ev || declined) {
+      if (!cancel.run(b.id).changes) continue; // otra sincronización ya la canceló
+      busyCache = null;
+      console.log(`[google] reserva ${b.id} cancelada: ${declined ? 'el invitado rechazó la invitación' : 'el evento se borró en Calendar'}`);
+      if (declined) {
+        try {
+          await google.deleteEvent(b.google_event_id, { notify: false });
+        } catch (err) {
+          console.error('[google] no se pudo borrar el evento rechazado:', err.message);
+        }
+      }
+      emit('invitee.canceled', getBooking(b.id), { baseUrl: BASE_URL });
+      continue;
+    }
+    if (!ev.start || !ev.end || ev.end <= ev.start || (ev.start === b.start_utc && ev.end === b.end_utc)) continue;
+    try {
+      if (!move.run(ev.start, ev.end, b.id, b.start_utc).changes) continue;
+    } catch (err) {
+      // Lo moviste justo al inicio de otra reserva: la app deja esta como estaba.
+      if (/UNIQUE/i.test(err.message)) console.error(`[google] reserva ${b.id}: el nuevo horario choca con otra reserva, no la muevo`);
+      else console.error(`[google] reserva ${b.id}: no pude reprogramarla:`, err.message);
+      continue;
+    }
+    busyCache = null;
+    console.log(`[google] reserva ${b.id} reprogramada desde Calendar`);
+    emit('invitee.rescheduled', getBooking(b.id), { baseUrl: BASE_URL, manageUrl: manageUrl(manageToken(b.id)), previousStart: b.start_utc, event: getEvent(b.event_type_id) });
+  }
+}
+
 // Nota: en una reprogramación el evento viejo sigue ocupado en Google, así que su propio horario
 // no se ofrece como destino (no tiene sentido moverlo a donde ya está).
 async function availableSlots(event, { fresh = false, excludeId = '' } = {}) {
+  await syncFromGoogle({ fresh });
   const now = Date.now();
   let busy = [];
   try {
@@ -432,8 +490,10 @@ async function handleAdminApi(req, res, url) {
       guard(() => reorderEvents(body.ids));
       return sendJson(res, 200, { ok: true });
     case 'GET /api/admin/stats':
+      await syncFromGoogle();
       return sendJson(res, 200, eventStats());
     case 'GET /api/admin/bookings': {
+      await syncFromGoogle();
       const now = Date.now();
       const rows = db
         .prepare("SELECT * FROM bookings WHERE (status = 'confirmed' AND end_utc > ?) OR (status = 'cancelled' AND created_at > ?) ORDER BY start_utc")

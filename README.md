@@ -73,6 +73,11 @@ Notas:
 - Los eventos se crean en `GOOGLE_CALENDAR_ID` (por defecto `primary`) y se consulta el mismo calendario para ver qué estás ocupado. Los eventos de día completo marcados como "ocupado" bloquean ese día.
 - Google también envía su propia invitación al visitante, además del mail de este sistema.
 - Si Google falla al reservar, la reserva **no** se confirma (para no prometer un horario que no está en tu calendario).
+- Lo que pase en Google Calendar con el evento de una reserva futura se refleja solo en la app (lo revisa como mucho una vez por minuto al mostrar horarios o abrir el panel, y en fresco al reservar):
+  - **Lo borrás:** la reserva queda cancelada, el horario vuelve a ofrecerse y se envía `invitee.canceled` al webhook.
+  - **Lo movés:** la reserva se reprograma a ese horario (se libera el viejo) y se envía `invitee.rescheduled`. Si lo movés justo al inicio de otra reserva, o a día completo, la app no la mueve.
+  - **El invitado lo rechaza:** la reserva queda cancelada y la app borra el evento de tu calendario sin avisarle (ya dijo que no), para liberar el horario; se envía `invitee.canceled`.
+  - No se mandan mails: Google ya avisa al invitado de lo que hagas en Calendar, y a vos de que rechazó.
 - Para crear Meet necesitás una cuenta que lo permita (las cuentas personales de Gmail sirven).
 
 ### Cuentas de Google extra (solo disponibilidad)

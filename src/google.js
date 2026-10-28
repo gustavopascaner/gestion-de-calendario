@@ -150,10 +150,29 @@ export async function moveEvent(eventId, startMs, endMs, ownerTz) {
   });
 }
 
-export async function deleteEvent(eventId) {
+/**
+ * Cómo están hoy en Google estos eventos de la cuenta principal. Devuelve un Map id →
+ *   null (borrado a mano en Calendar: 404/410 o status «cancelled») o
+ *   { start, end, declined } con start/end en ms (null si pasó a día completo) y los emails que rechazaron.
+ * Lanza ante cualquier otro error, para no tocar reservas por una falla pasajera.
+ */
+export async function eventStates(ids) {
+  const entries = await Promise.all(
+    ids.map(async (id) => {
+      const ev = await call(`${calPath()}/events/${encodeURIComponent(id)}`, { okStatuses: [404, 410] });
+      if (!ev?.id || ev.status === 'cancelled') return [id, null];
+      const ms = (t) => (t?.dateTime ? Date.parse(t.dateTime) : null);
+      const declined = (ev.attendees ?? []).filter((a) => a.responseStatus === 'declined').map((a) => a.email?.toLowerCase());
+      return [id, { start: ms(ev.start), end: ms(ev.end), declined }];
+    }),
+  );
+  return new Map(entries);
+}
+
+export async function deleteEvent(eventId, { notify = true } = {}) {
   await call(`${calPath()}/events/${encodeURIComponent(eventId)}`, {
     method: 'DELETE',
-    query: { sendUpdates: 'all' },
+    query: { sendUpdates: notify ? 'all' : 'none' },
     okStatuses: [404, 410], // ya borrado
   });
 }
