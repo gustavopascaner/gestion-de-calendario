@@ -85,7 +85,7 @@ function validateFields(input) {
     let id = typeof f?.id === 'string' && /^[a-z0-9_]{1,32}$/.test(f.id) && !RESERVED_IDS.includes(f.id) ? f.id : `f_${crypto.randomBytes(4).toString('hex')}`;
     if (seen.has(id)) id = `f_${crypto.randomBytes(4).toString('hex')}`;
     seen.add(id);
-    const label = text(f?.label, 80, 'Texto de la pregunta', 1);
+    const label = text(f?.label, 300, 'Texto de la pregunta', 1);
     if (!FIELD_TYPES.includes(f?.type)) throw new SettingsError(`«${label}»: tipo de pregunta inválido.`);
     let options = [];
     if (f.type === 'select') {

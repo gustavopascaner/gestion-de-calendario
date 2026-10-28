@@ -270,7 +270,7 @@ function panelFormulario() {
       'div',
       { class: 'qcard' },
       el('div', { class: 'row' },
-        field('Pregunta', el('input', { value: f.label, maxlength: '80', oninput: (e) => { f.label = e.target.value; markDirty(); } })),
+        field('Pregunta', el('input', { value: f.label, maxlength: '300', oninput: (e) => { f.label = e.target.value; markDirty(); } })),
         field('Tipo', typeSel),
       ),
       f.type === 'checkbox' ? null : field('Texto de ayuda', el('input', { value: f.placeholder ?? '', maxlength: '120', oninput: (e) => { f.placeholder = e.target.value; markDirty(); } })),
