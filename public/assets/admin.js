@@ -73,18 +73,29 @@ function loginView() {
     'form',
     {
       class: 'booking',
+      id: 'login',
+      method: 'post',
+      action: '/admin',
       onsubmit: async (e) => {
         e.preventDefault();
         error.textContent = '';
         try {
           await api('/api/admin/login', { method: 'POST', body: { password: form.elements.password.value } });
+          // Le avisa al gestor de contraseñas (Chrome) que el login fue correcto, para que ofrezca guardarla.
+          if (window.PasswordCredential) {
+            try {
+              await navigator.credentials.store(new PasswordCredential({ id: form.elements.username.value, password: form.elements.password.value, name: 'Panel de reservas' }));
+            } catch {}
+          }
           await boot();
         } catch (err) {
           error.textContent = err.message;
         }
       },
     },
-    field('Contraseña del panel', el('input', { name: 'password', type: 'password', required: true, autocomplete: 'current-password' }), 'Es el valor de ADMIN_SECRET en tu .env'),
+    // Usuario fijo y oculto: los gestores de contraseñas necesitan un par usuario + contraseña.
+    el('input', { name: 'username', id: 'username', type: 'text', autocomplete: 'username', value: 'admin', hidden: true, readonly: true }),
+    field('Contraseña del panel', el('input', { name: 'password', id: 'password', type: 'password', required: true, autocomplete: 'current-password' }), 'Es el valor de ADMIN_SECRET en tu .env'),
     error,
     el('button', { class: 'primary', type: 'submit' }, 'Entrar'),
   );

@@ -18,7 +18,7 @@ const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\
 const EMBED = (process.env.EMBED_ORIGINS ?? '*').trim();
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 const TOKEN_TTL = 90 * 24 * 3_600_000;
-const ADMIN_TTL = 12 * 3_600_000;
+const ADMIN_TTL = 30 * 24 * 3_600_000;
 
 sign({ act: 'check', exp: 0 }); // falla al arrancar si falta SIGNING_SECRET
 seedEvents();
@@ -360,7 +360,9 @@ function adminCookie(req) {
 
 function requireAdmin(req) {
   if (!process.env.ADMIN_SECRET) throw new HttpError(404, 'El panel está desactivado: definí ADMIN_SECRET en .env.');
-  if (!verify(adminCookie(req), 'admin')) throw new HttpError(401, 'No autorizado');
+  const session = verify(adminCookie(req), 'admin');
+  if (!session) throw new HttpError(401, 'No autorizado');
+  return session;
 }
 
 const cookie = (value, maxAge) =>
@@ -381,7 +383,11 @@ async function handleAdminApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
-  requireAdmin(req);
+  // Sesión deslizante: si queda menos de la mitad del plazo, se renueva.
+  const session = requireAdmin(req);
+  if (session.exp - Date.now() < ADMIN_TTL / 2) {
+    res.setHeader('Set-Cookie', cookie(sign({ act: 'admin', exp: Date.now() + ADMIN_TTL }), ADMIN_TTL / 1000));
+  }
   const body = req.method === 'POST' || req.method === 'PUT' ? await readJson(req) : {};
   const eventRoute = /^\/api\/admin\/events\/(\d+)$/.exec(url.pathname);
   if (eventRoute) {
