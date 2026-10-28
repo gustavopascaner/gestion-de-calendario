@@ -90,8 +90,8 @@ function validateFields(input) {
     let options = [];
     if (f.type === 'select') {
       options = [...new Set((Array.isArray(f.options) ? f.options : []).map((o) => String(o).trim()).filter(Boolean))];
-      if (!options.length || options.length > 20 || options.some((o) => o.length > 80)) {
-        throw new SettingsError(`«${label}»: la lista necesita entre 1 y 20 opciones (hasta 80 caracteres cada una).`);
+      if (!options.length || options.length > 20 || options.some((o) => o.length > 300)) {
+        throw new SettingsError(`«${label}»: la lista necesita entre 1 y 20 opciones (hasta 300 caracteres cada una).`);
       }
     }
     return { id, label, type: f.type, required: Boolean(f.required), options, placeholder: text(f.placeholder, 120, 'Texto de ayuda') };
