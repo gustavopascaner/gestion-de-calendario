@@ -64,6 +64,7 @@ for (const sql of [
   'ALTER TABLE bookings ADD COLUMN event_type_id INTEGER',
   "ALTER TABLE bookings ADD COLUMN event_title TEXT NOT NULL DEFAULT ''",
   "ALTER TABLE bookings ADD COLUMN tracking TEXT NOT NULL DEFAULT '{}'", // utm_* del link de origen
+  "ALTER TABLE webhook_deliveries ADD COLUMN destination TEXT NOT NULL DEFAULT ''", // nombre del webhook al que se envió
 ]) {
   try {
     db.exec(sql);

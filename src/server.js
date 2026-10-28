@@ -11,7 +11,7 @@ import { generateSlots } from './availability.js';
 import { sign, verify } from './tokens.js';
 import * as google from './google.js';
 import { notify } from './mail.js';
-import { emit, listDeliveries, sendTest } from './webhooks.js';
+import { emit, listDeliveries, safeWebhooks, saveWebhooks, sendTest } from './webhooks.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
@@ -185,8 +185,8 @@ const view = (b) => {
   };
 };
 
-// El panel nunca recibe el secreto del webhook, solo si hay uno guardado.
-const safeGlobal = ({ webhookSecret, ...g }) => ({ ...g, webhookSecretSet: Boolean(webhookSecret) });
+// Los webhooks viajan aparte (safeWebhooks), sin secretos.
+const safeGlobal = ({ webhookUrl, webhookSecret, ...g }) => g;
 
 // Solo se guardan parámetros utm_* cortos del link de origen (útiles para atribución en n8n).
 function parseTracking(raw) {
@@ -405,6 +405,7 @@ async function handleAdminApi(req, res, url) {
       return sendJson(res, 200, {
         global: safeGlobal(getGlobal()),
         busyAccounts: google.listBusyAccounts(),
+        webhooks: safeWebhooks(),
         deliveries: listDeliveries(),
         events: listEvents(),
         defaultEvent: { ...DEFAULT_EVENT, slug: '', title: 'Nuevo evento' },
@@ -412,9 +413,11 @@ async function handleAdminApi(req, res, url) {
         smtp: Boolean(process.env.SMTP_HOST),
       });
     case 'PUT /api/admin/global':
-      return sendJson(res, 200, { global: safeGlobal(guard(() => saveGlobal(body))), deliveries: listDeliveries() });
+      return sendJson(res, 200, { global: safeGlobal(guard(() => saveGlobal(body))) });
+    case 'PUT /api/admin/webhooks':
+      return sendJson(res, 200, { webhooks: guard(() => saveWebhooks(body.webhooks)), deliveries: listDeliveries() });
     case 'POST /api/admin/webhook/test':
-      return sendJson(res, 200, { ...(await sendTest(BASE_URL)), deliveries: listDeliveries() });
+      return sendJson(res, 200, { ...(await sendTest(BASE_URL, String(body.id ?? 'main'))), deliveries: listDeliveries() });
     case 'POST /api/admin/events': {
       const event = guard(() => (body.duplicateOf ? duplicateEvent(Number(body.duplicateOf)) : createEvent(body)));
       return sendJson(res, 201, { event });

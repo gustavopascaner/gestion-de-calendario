@@ -3,7 +3,7 @@
   --fg: #1a1a1a;
   --muted: #6b6b6b;
   --border: #d9d9de;
-  --accent: #2563eb;
+  --accent: #477a6f; /* verde de la marca; cada página de reservas lo cambia por el color de su evento */
   --accent-fg: #ffffff;
   --danger: #c0262d;
   --surface: #f6f6f8;

@@ -1,4 +1,4 @@
-import { $, el, api, fmtLong, applyTheme } from './common.js';
+import { $, el, api, fmtLong } from './common.js';
 
 const DAYS = [['mon', 'Lunes'], ['tue', 'Martes'], ['wed', 'Miércoles'], ['thu', 'Jueves'], ['fri', 'Viernes'], ['sat', 'Sábado'], ['sun', 'Domingo']];
 const TYPES = [['text', 'Texto corto'], ['textarea', 'Texto largo'], ['tel', 'Teléfono'], ['select', 'Lista desplegable'], ['checkbox', 'Casilla (sí/no)']];
@@ -166,7 +166,6 @@ function openEditor(event) {
   etab = 'detalles';
   dirty = !event.id; // un evento nuevo todavía no está guardado
   saveMsg = null;
-  applyTheme(S.accentColor);
   renderShell();
 }
 
@@ -200,7 +199,17 @@ function panelDetalles() {
       field('Antelación mínima (horas)', bound(S, 'input', 'minNoticeHours', { type: 'number', min: '0', max: '720' }, { number: true })),
       field('Días hacia adelante', bound(S, 'input', 'horizonDays', { type: 'number', min: '1', max: '90' }, { number: true })),
     ),
+    field('Webhook (n8n)', webhookSelect(), 'A qué webhook se envían las reservas, reprogramaciones y cancelaciones de este evento. Los webhooks se configuran en «Integraciones».'),
   );
+}
+
+function webhookSelect() {
+  const hooks = meta.webhooks ?? [];
+  const current = S.webhookId || 'main';
+  const sel = el('select', { onchange: (e) => { S.webhookId = e.target.value; markDirty(); } },
+    ...hooks.map((w) => el('option', { value: w.id, selected: w.id === current }, w.url ? w.name : `${w.name} (sin URL)`)),
+    el('option', { value: 'none', selected: current === 'none' }, 'No enviar a ningún webhook'));
+  return sel;
 }
 
 function panelHorarios() {
@@ -280,12 +289,11 @@ function panelFormulario() {
 
 function panelApariencia() {
   const color = bound(S, 'input', 'accentColor', { type: 'color' });
-  color.addEventListener('input', () => applyTheme(S.accentColor));
   return el(
     'div',
     { class: 'panel' },
     el('label', { class: 'check' }, el('input', { type: 'checkbox', checked: S.showHeader !== false, onchange: (e) => { S.showHeader = e.target.checked; markDirty(); } }), 'Mostrar el encabezado (tu nombre, título, duración y ubicación)'),
-    field('Color principal', color, 'Botones, días disponibles y enlaces de la página de este evento.'),
+    field('Color principal', color, 'Botones, días disponibles y enlaces de la página de reservas de este evento. El panel de administración siempre usa el color de la marca.'),
     field('Mensaje de confirmación', bound(S, 'textarea', 'confirmationMessage', { rows: '3', maxlength: '500' }), 'Se muestra al visitante después de reservar (p. ej. instrucciones para prepararse).'),
     field('Redirigir a otra página tras reservar', bound(S, 'input', 'redirectUrl', { type: 'url', placeholder: 'https://tusitio.com/gracias' }), 'Opcional. Si lo completás, no se muestra la página de confirmación y el visitante va a esta URL. Los mails se envían igual.'),
     el('h2', {}, 'Evento de conversión (Meta Pixel)'),
@@ -356,7 +364,7 @@ function panelInicio() {
         chip(meta.google.connected, 'Google Calendar'),
         chip(extra > 0, extra === 1 ? '1 cuenta extra' : `${extra} cuentas extra`),
         chip(meta.smtp, 'Email (SMTP)'),
-        chip(Boolean(G.webhookUrl), 'Webhook n8n')),
+        chip((meta.webhooks ?? []).some((w) => w.url), 'Webhook n8n')),
     );
   })();
   return box;
@@ -399,19 +407,22 @@ function panelReservas() {
 
 function panelIntegraciones() {
   const g = meta.google;
-  const W = { url: G.webhookUrl ?? '', secret: '', clear: false };
+  // Copia editable de los destinos: el secreto solo se manda si se escribió uno nuevo.
+  const W = (meta.webhooks ?? []).map((w) => ({ ...w, secret: '', clearSecret: false }));
   const msg = el('span', { role: 'status' });
   const deliveries = el('div');
+  const hookList = el('div');
 
   const renderDeliveries = () => {
     const list = meta.deliveries ?? [];
     deliveries.replaceChildren(
       list.length
         ? el('table', {},
-            el('thead', {}, el('tr', {}, ...['Cuándo', 'Evento', 'Estado', 'Intentos', 'Error'].map((h) => el('th', {}, h)))),
+            el('thead', {}, el('tr', {}, ...['Cuándo', 'Evento', 'Webhook', 'Estado', 'Intentos', 'Error'].map((h) => el('th', {}, h)))),
             el('tbody', {}, ...list.map((d) => el('tr', {},
               el('td', {}, fmtLong(d.created_at, G.timezone)),
               el('td', {}, d.event),
+              el('td', {}, d.destination || ''),
               el('td', {}, el('span', { class: `badge${d.status === 'ok' ? '' : ' off'}` }, d.status === 'ok' ? 'Enviado' : d.status === 'failed' ? 'Falló' : 'Reintentando')),
               el('td', {}, String(d.attempts)),
               el('td', {}, d.last_error || ''),
@@ -422,36 +433,52 @@ function panelIntegraciones() {
   };
   renderDeliveries();
 
-  const saveBtn = el('button', { type: 'button', class: 'primary' }, 'Guardar webhook');
+  const say = (cls, text) => { msg.className = cls; msg.textContent = text; };
+
+  const renderHooks = () => {
+    hookList.replaceChildren(...W.map((w, i) => {
+      const saved = (meta.webhooks ?? []).find((s) => s.id === w.id);
+      const users = events.filter((e) => (e.webhookId || 'main') === w.id).map((e) => e.title);
+      const testBtn = el('button', { type: 'button', disabled: !saved?.url }, 'Enviar prueba');
+      testBtn.title = saved?.url ? '' : 'Primero guardá la URL';
+      testBtn.onclick = async () => {
+        say('muted', `Enviando prueba a «${w.name}»…`);
+        try {
+          const res = await api('/api/admin/webhook/test', { method: 'POST', body: { id: w.id } });
+          meta.deliveries = res.deliveries;
+          say(res.ok ? 'ok' : 'error', res.ok ? `Prueba enviada a «${w.name}» ✓ (event: "test")` : `No se pudo enviar a «${w.name}»: ${res.error}`);
+          renderDeliveries();
+        } catch (err) {
+          say('error', err.message);
+        }
+      };
+      const main = w.id === 'main';
+      return el('div', { class: 'qcard' },
+        el('div', { class: 'row' },
+          field('Nombre', el('input', { value: w.name, maxlength: '40', disabled: main, oninput: (e) => { w.name = e.target.value; } })),
+          field('URL', el('input', { type: 'url', value: w.url, placeholder: 'https://n8n.tudominio.com/webhook/…', oninput: (e) => { w.url = e.target.value; } }))),
+        field('Secreto (opcional)', el('input', { type: 'password', autocomplete: 'off', placeholder: w.secretSet ? 'Guardado: escribí para reemplazarlo' : 'Se envía en el header X-Webhook-Secret', oninput: (e) => { w.secret = e.target.value; } })),
+        w.secretSet ? el('label', { class: 'check' }, el('input', { type: 'checkbox', onchange: (e) => { w.clearSecret = e.target.checked; } }), 'Quitar el secreto guardado') : null,
+        el('p', { class: 'hint' }, users.length ? `Lo usan: ${users.join(', ')}` : main ? 'Es el webhook de los eventos nuevos.' : 'Todavía no lo usa ningún evento.'),
+        el('div', { class: 'tools' },
+          testBtn,
+          main ? null : el('button', { type: 'button', class: 'danger', onclick: () => { W.splice(i, 1); renderHooks(); } }, 'Quitar')),
+      );
+    }));
+  };
+  renderHooks();
+
+  const addBtn = el('button', { type: 'button', disabled: W.length >= 10, onclick: () => { W.push({ id: null, name: `Webhook ${W.length + 1}`, url: '', secret: '', secretSet: false }); renderHooks(); } }, '+ Agregar otro webhook');
+  const saveBtn = el('button', { type: 'button', class: 'primary' }, 'Guardar webhooks');
   saveBtn.onclick = async () => {
-    msg.className = 'muted';
-    msg.textContent = 'Guardando…';
+    say('muted', 'Guardando…');
     try {
-      const res = await api('/api/admin/global', {
-        method: 'PUT',
-        body: { ownerName: G.ownerName, timezone: G.timezone, pixelId: G.pixelId, webhookUrl: W.url, webhookSecret: W.secret, clearWebhookSecret: W.clear },
-      });
-      G = res.global;
+      const res = await api('/api/admin/webhooks', { method: 'PUT', body: { webhooks: W } });
+      meta.webhooks = res.webhooks;
       meta.deliveries = res.deliveries;
       renderShell();
     } catch (err) {
-      msg.className = 'error';
-      msg.textContent = err.message;
-    }
-  };
-  const testBtn = el('button', { type: 'button' }, 'Enviar prueba');
-  testBtn.onclick = async () => {
-    msg.className = 'muted';
-    msg.textContent = 'Enviando…';
-    try {
-      const res = await api('/api/admin/webhook/test', { method: 'POST', body: {} });
-      meta.deliveries = res.deliveries;
-      msg.className = res.ok ? 'ok' : 'error';
-      msg.textContent = res.ok ? 'Prueba enviada ✓ (event: "test")' : `No se pudo enviar: ${res.error}`;
-      renderDeliveries();
-    } catch (err) {
-      msg.className = 'error';
-      msg.textContent = err.message;
+      say('error', err.message);
     }
   };
 
@@ -476,12 +503,10 @@ function panelIntegraciones() {
     el('p', { class: 'muted' }, 'Los eventos ocupados de estas cuentas bloquean horarios en tus páginas de reserva. No se crea ningún evento ni link de Meet ahí; solo se pide el permiso de «ver si estás libre u ocupado».'),
     ...busy,
     g.configured ? el('div', {}, el('a', { href: '/admin/google/connect?mode=busy' }, '+ Conectar otra cuenta de Google')) : null,
-    el('h2', {}, 'Webhook (n8n)'),
-    el('p', { class: 'muted' }, 'Cada vez que alguien reserva, reprograma o cancela, se envía un POST JSON a esta URL (formato parecido al de Calendly: event + payload). En n8n usá un nodo Webhook con método POST.'),
-    field('URL del webhook', el('input', { type: 'url', value: W.url, placeholder: 'https://n8n.tudominio.com/webhook/…', oninput: (e) => { W.url = e.target.value; } })),
-    field('Secreto (opcional)', el('input', { type: 'password', autocomplete: 'off', placeholder: G.webhookSecretSet ? 'Guardado: escribí para reemplazarlo' : 'Se envía en el header X-Webhook-Secret', oninput: (e) => { W.secret = e.target.value; } })),
-    G.webhookSecretSet ? el('label', { class: 'check' }, el('input', { type: 'checkbox', onchange: (e) => { W.clear = e.target.checked; } }), 'Quitar el secreto guardado') : null,
-    el('div', { class: 'actions' }, saveBtn, testBtn, msg),
+    el('h2', {}, 'Webhooks (n8n)'),
+    el('p', { class: 'muted' }, 'Cada vez que alguien reserva, reprograma o cancela, se envía un POST JSON (formato parecido al de Calendly: event + payload). En n8n usá un nodo Webhook con método POST. Podés tener varios webhooks y elegir en cada tipo de evento (pestaña «Detalles») a cuál va.'),
+    hookList,
+    el('div', { class: 'actions' }, addBtn, saveBtn, msg),
     deliveries,
     el('h2', {}, 'Email (SMTP)'),
     el('p', {}, meta.smtp ? el('span', { class: 'ok' }, '✅ Configurado.') : 'Sin configurar: los mails solo se registran en la consola del servidor. Completá SMTP_* en .env.'),
@@ -509,7 +534,6 @@ async function save() {
         : await api('/api/admin/events', { method: 'POST', body: S });
       S = clone(event);
       await refreshEvents();
-      applyTheme(S.accentColor);
     } else {
       G = (await api('/api/admin/global', { method: 'PUT', body: G })).global;
     }
@@ -586,7 +610,6 @@ async function boot() {
     events = data.events;
     meta = data;
     $('#logout').hidden = false;
-    applyTheme(events[0]?.accentColor);
     renderShell();
   } catch (err) {
     if (err.status === 401) return loginView();

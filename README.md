@@ -81,7 +81,7 @@ En `/admin` → **Integraciones** → **+ Conectar otra cuenta de Google**. Esas
 
 ## Webhook para n8n
 
-En `/admin` → **Integraciones** → **Webhook (n8n)**: pegá la URL de producción de tu nodo *Webhook* de n8n (método `POST`), un secreto opcional y usá **Enviar prueba** para ver el payload en n8n. Cada vez que alguien reserva, reprograma o cancela se envía un `POST` JSON, **con la misma forma que el de Calendly** (`event` + `payload`), así que los flujos que hoy leen Calendly se adaptan casi sin cambios:
+En `/admin` → **Integraciones** → **Webhooks (n8n)**: pegá la URL de producción de tu nodo *Webhook* de n8n (método `POST`), un secreto opcional y usá **Enviar prueba** para ver el payload en n8n. Podés agregar varios webhooks con nombre (hasta 10); en cada tipo de evento, pestaña **Detalles** → **Webhook (n8n)**, elegís a cuál van sus reservas o «No enviar a ningún webhook». «Principal» siempre existe y es el de los eventos que no eligieron otro; un webhook que usa algún evento no se puede quitar. Cada vez que alguien reserva, reprograma o cancela se envía un `POST` JSON, **con la misma forma que el de Calendly** (`event` + `payload`), así que los flujos que hoy leen Calendly se adaptan casi sin cambios:
 
 | `event` | Cuándo |
 |---|---|

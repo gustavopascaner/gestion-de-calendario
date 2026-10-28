@@ -43,7 +43,7 @@ before(async () => {
   hook = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (d) => { raw += d; });
-    req.on('end', () => { received.push({ body: JSON.parse(raw), secret: req.headers['x-webhook-secret'] }); res.end('ok'); });
+    req.on('end', () => { received.push({ body: JSON.parse(raw), secret: req.headers['x-webhook-secret'], path: req.url }); res.end('ok'); });
   });
   await new Promise((r) => hook.listen(HOOK_PORT, r));
 
@@ -113,18 +113,34 @@ test('ABM de eventos desde el panel', async () => {
   assert.equal(invalid.status, 400);
 });
 
-test('webhook: configurar y recibir la prueba', async () => {
-  const saved = await api('/api/admin/global', {
+test('webhooks: configurar varios destinos y recibir la prueba', async () => {
+  const saved = await api('/api/admin/webhooks', {
     method: 'PUT',
     admin: true,
-    body: { ownerName: 'Gus', timezone: 'America/Argentina/Buenos_Aires', webhookUrl: `http://localhost:${HOOK_PORT}/hook`, webhookSecret: 'secreto-e2e' },
+    body: { webhooks: [
+      { id: 'main', name: 'Principal', url: `http://localhost:${HOOK_PORT}/hook`, secret: 'secreto-e2e' },
+      { name: 'Pacientes', url: `http://localhost:${HOOK_PORT}/pacientes`, secret: 'otro-secreto' },
+    ] },
   });
   assert.equal(saved.status, 200);
-  assert.equal(saved.data.global.webhookSecretSet, true);
-  assert.equal(saved.data.global.webhookSecret, undefined); // el secreto nunca vuelve al navegador
+  const [main, other] = saved.data.webhooks;
+  assert.equal(main.secretSet, true);
+  assert.equal(main.secret, undefined); // el secreto nunca vuelve al navegador
+  assert.match(other.id, /^w_/);
+
   assert.equal((await api('/api/admin/webhook/test', { method: 'POST', admin: true, body: {} })).data.ok, true);
-  assert.ok(await waitFor(() => received.some((r) => r.body.event === 'test')));
-  assert.equal(received.find((r) => r.body.event === 'test').secret, 'secreto-e2e');
+  assert.equal((await api('/api/admin/webhook/test', { method: 'POST', admin: true, body: { id: other.id } })).data.ok, true);
+  assert.ok(await waitFor(() => received.filter((r) => r.body.event === 'test').length === 2));
+  assert.deepEqual(received.map((r) => [r.path, r.secret]), [['/hook', 'secreto-e2e'], ['/pacientes', 'otro-secreto']]);
+
+  // guardar de nuevo sin secretos conserva los guardados; el Principal no se puede quitar
+  const again = await api('/api/admin/webhooks', { method: 'PUT', admin: true, body: { webhooks: saved.data.webhooks } });
+  assert.ok(again.data.webhooks.every((w) => w.secretSet));
+  assert.equal((await api('/api/admin/webhooks', { method: 'PUT', admin: true, body: { webhooks: [other] } })).status, 400);
+
+  // los ajustes generales ya no tocan los webhooks
+  await api('/api/admin/global', { method: 'PUT', admin: true, body: { ownerName: 'Gus', timezone: 'America/Argentina/Buenos_Aires' } });
+  assert.equal((await api('/api/admin/settings', { admin: true })).data.webhooks.length, 2);
 });
 
 test('flujo completo: reservar → agenda compartida → reprogramar → cancelar', async () => {
@@ -202,4 +218,32 @@ test('inicio del panel: estadísticas y borrado protegido', async () => {
   const events = (await api('/api/admin/settings', { admin: true })).data.events;
   const shortId = events.find((e) => e.slug === 'llamada-corta').id;
   assert.equal((await api(`/api/admin/events/${shortId}`, { method: 'DELETE', admin: true })).status, 400);
+});
+
+test('cada tipo de evento manda sus reservas a su webhook', async () => {
+  const { events, webhooks } = (await api('/api/admin/settings', { admin: true })).data;
+  const other = webhooks.find((w) => w.name === 'Pacientes');
+  const short = events.find((e) => e.slug === 'llamada-corta');
+  assert.equal(short.webhookId ?? 'main', 'main');
+  assert.equal((await api(`/api/admin/events/${short.id}`, { method: 'PUT', admin: true, body: { ...short, webhookId: other.id } })).status, 200);
+
+  // no se puede quitar un webhook que usa un evento
+  const removed = await api('/api/admin/webhooks', { method: 'PUT', admin: true, body: { webhooks: webhooks.filter((w) => w.id !== other.id) } });
+  assert.equal(removed.status, 400);
+  assert.match(removed.data.error, /Llamada corta/);
+
+  received.length = 0;
+  const [start] = (await api('/api/slots?slug=llamada-corta')).data.slots;
+  const fieldId = short.fields[0].id;
+  const booked = await api('/api/book', { method: 'POST', body: { slug: 'llamada-corta', name: 'Beto', email: 'beto@example.com', start, answers: { [fieldId]: '+54 11 5555 1234' } } });
+  assert.equal(booked.status, 201);
+  assert.ok(await waitFor(() => received.length >= 1));
+  assert.deepEqual(received.map((r) => [r.path, r.body.event, r.secret]), [['/pacientes', 'invitee.created', 'otro-secreto']]);
+
+  // 'none': el evento no avisa a ningún webhook
+  await api(`/api/admin/events/${short.id}`, { method: 'PUT', admin: true, body: { ...short, webhookId: 'none' } });
+  received.length = 0;
+  assert.equal((await api('/api/admin/cancel', { method: 'POST', admin: true, body: { id: booked.data.id ?? (await api(`/api/booking?t=${booked.data.token}`)).data.id } })).status, 200);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(received.length, 0);
 });

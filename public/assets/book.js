@@ -21,7 +21,6 @@ function showMessage(text) {
 function showList(ownerName, events) {
   card.classList.add('single');
   info.hidden = true;
-  applyTheme(events[0].accentColor);
   document.title = ownerName;
   stage.replaceChildren(
     el('h1', {}, ownerName),

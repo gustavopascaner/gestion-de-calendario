@@ -11,7 +11,11 @@ const RESERVED_IDS = ['name', 'email', 'tz', 'start', 't'];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
+// Color de la marca: el panel siempre lo usa, y es el color con el que nace cada evento nuevo.
+export const BRAND_COLOR = '#477a6f';
+
 // Valores iniciales: salen de config.js. Lo que se guarda desde /admin tiene prioridad.
+// (webhookUrl/webhookSecret son del formato viejo de un solo webhook: solo se leen para migrar a «Principal».)
 export const DEFAULT_GLOBAL = { ownerName: config.ownerName, timezone: config.timezone, webhookUrl: '', webhookSecret: '', pixelId: '' };
 
 export const DEFAULT_EVENT = {
@@ -26,7 +30,8 @@ export const DEFAULT_EVENT = {
   minNoticeHours: config.minNoticeHours,
   horizonDays: config.horizonDays,
   weekly: config.weekly,
-  accentColor: '#2563eb',
+  accentColor: BRAND_COLOR,
+  webhookId: 'main', // a qué webhook van las reservas de este evento ('none' = a ninguno)
   confirmationMessage: '',
   redirectUrl: '',
   showHeader: true, // mostrar nombre, título, duración y ubicación en el panel izquierdo de la página de reservas
@@ -108,22 +113,9 @@ function validatePixelId(value) {
 
 export function validateGlobal(input) {
   if (!input || typeof input !== 'object') throw new SettingsError('Datos inválidos.');
-  let webhookUrl = text(input.webhookUrl, 500, 'URL del webhook');
-  if (webhookUrl) {
-    let url;
-    try {
-      url = new URL(webhookUrl);
-    } catch {
-      throw new SettingsError('La URL del webhook no es válida.');
-    }
-    if (!['http:', 'https:'].includes(url.protocol)) throw new SettingsError('La URL del webhook tiene que empezar con http:// o https://');
-    webhookUrl = url.href;
-  }
   return {
     ownerName: text(input.ownerName, 100, 'Tu nombre', 1),
     timezone: checkTz(input.timezone),
-    webhookUrl,
-    webhookSecret: text(input.webhookSecret, 200, 'Secreto del webhook'),
     pixelId: validatePixelId(input.pixelId),
   };
 }
@@ -136,9 +128,9 @@ export function getGlobal() {
 }
 
 export function saveGlobal(input) {
-  const clean = validateGlobal(input);
-  // El panel nunca recibe el secreto guardado: si llega vacío se conserva, salvo que se pida quitarlo.
-  if (!clean.webhookSecret && !input.clearWebhookSecret) clean.webhookSecret = getGlobal().webhookSecret ?? '';
+  // Se conservan los campos del webhook viejo hasta que se guarde la lista de webhooks (ver webhooks.js).
+  const { webhookUrl, webhookSecret } = getGlobal();
+  const clean = { ...validateGlobal(input), webhookUrl, webhookSecret };
   setKv('global', JSON.stringify(clean));
   globalCache = clean;
   return clean;
@@ -152,9 +144,15 @@ function validatePixelEvent(value) {
   return name;
 }
 
+function validateWebhookId(value) {
+  const id = String(value ?? '').trim() || 'main';
+  if (!/^[a-z0-9_]{1,40}$/.test(id)) throw new SettingsError('Webhook inválido.');
+  return id;
+}
+
 export function validateEvent(input) {
   if (!input || typeof input !== 'object') throw new SettingsError('Datos inválidos.');
-  if (!/^#[0-9a-fA-F]{6}$/.test(input.accentColor ?? '')) throw new SettingsError('El color tiene que ser un hexadecimal como #2563eb.');
+  if (!/^#[0-9a-fA-F]{6}$/.test(input.accentColor ?? '')) throw new SettingsError('El color tiene que ser un hexadecimal como #477a6f.');
 
   const slug = String(input.slug ?? '').trim().toLowerCase();
   if (slug && (slug.length > 40 || !SLUG.test(slug))) {
@@ -186,6 +184,7 @@ export function validateEvent(input) {
     horizonDays: int(input.horizonDays, 1, 90, 'Días hacia adelante'),
     weekly: validateWeekly(input.weekly),
     accentColor: input.accentColor.toLowerCase(),
+    webhookId: validateWebhookId(input.webhookId),
     confirmationMessage: text(input.confirmationMessage, 500, 'Mensaje de confirmación'),
     redirectUrl,
     showHeader: input.showHeader !== false,

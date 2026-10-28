@@ -4,8 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 process.env.DB_PATH = path.join(os.tmpdir(), `webhooks-test-${process.pid}-${Date.now()}.db`);
-const { buildPayload } = await import('../src/webhooks.js');
-const { validateGlobal, SettingsError } = await import('../src/settings.js');
+const { buildPayload, getWebhooks, saveWebhooks, webhookFor } = await import('../src/webhooks.js');
+const { SettingsError } = await import('../src/settings.js');
+const { setKv } = await import('../src/db.js');
+// Formato viejo: una sola URL en los ajustes generales (antes de que se lean y queden en caché).
+setKv('global', JSON.stringify({ ownerName: 'Gus', timezone: 'UTC', webhookUrl: 'https://viejo.example.com/hook', webhookSecret: 's' }));
 
 const booking = {
   id: 'abc', name: 'Sebastián Man Pérez', email: 'seba@example.com', tz: 'America/Argentina/Buenos_Aires', created_at: Date.UTC(2026, 9, 23),
@@ -39,10 +42,27 @@ test('cancelación y reprogramación', () => {
   assert.equal(r.payload.old_start_time, '2026-10-28T13:00:00.000Z');
 });
 
-test('valida la URL del webhook', () => {
-  const ok = { ownerName: 'Gus', timezone: 'America/Argentina/Buenos_Aires' };
-  assert.equal(validateGlobal({ ...ok, webhookUrl: '' }).webhookUrl, '');
-  assert.equal(validateGlobal({ ...ok, webhookUrl: 'https://n8n.example.com/webhook/abc' }).webhookUrl, 'https://n8n.example.com/webhook/abc');
-  assert.throws(() => validateGlobal({ ...ok, webhookUrl: 'ftp://x' }), SettingsError);
-  assert.throws(() => validateGlobal({ ...ok, webhookUrl: 'no es url' }), SettingsError);
+test('valida los webhooks y migra la URL vieja a «Principal»', () => {
+  assert.deepEqual(getWebhooks(), [{ id: 'main', name: 'Principal', url: 'https://viejo.example.com/hook', secret: 's' }]);
+
+  const main = { id: 'main', name: 'Principal', url: '' };
+  assert.equal(saveWebhooks([{ ...main, url: 'https://n8n.example.com/webhook/abc' }])[0].url, 'https://n8n.example.com/webhook/abc');
+  assert.equal(getWebhooks()[0].secret, 's'); // un secreto vacío conserva el guardado
+  assert.throws(() => saveWebhooks([{ ...main, url: 'ftp://x' }]), SettingsError);
+  assert.throws(() => saveWebhooks([{ ...main, url: 'no es url' }]), SettingsError);
+  assert.throws(() => saveWebhooks([{ ...main }, { name: 'principal', url: '' }]), SettingsError); // nombre repetido
+  assert.throws(() => saveWebhooks([{ name: 'Otro', url: '' }]), SettingsError); // sin Principal
+});
+
+test('cada evento elige su destino', () => {
+  const [main, other] = saveWebhooks([
+    { id: 'main', name: 'Principal', url: 'https://a.example.com/' },
+    { name: 'Otro', url: 'https://b.example.com/' },
+  ]);
+  assert.equal(webhookFor({}).url, 'https://a.example.com/'); // eventos viejos sin webhookId
+  assert.equal(webhookFor({ webhookId: other.id }).url, 'https://b.example.com/');
+  assert.equal(webhookFor({ webhookId: 'none' }), null);
+  assert.equal(webhookFor({ webhookId: 'w_borrado' }).id, main.id);
+  saveWebhooks([{ ...main, url: '' }, other]);
+  assert.equal(webhookFor({}), null); // Principal sin URL: no se envía
 });

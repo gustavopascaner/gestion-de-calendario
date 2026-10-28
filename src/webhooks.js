@@ -1,6 +1,7 @@
-import db from './db.js';
-import { getGlobal } from './settings.js';
-import { getEvent } from './events.js';
+import crypto from 'node:crypto';
+import db, { getKv, setKv } from './db.js';
+import { getGlobal, SettingsError } from './settings.js';
+import { getEvent, listEvents } from './events.js';
 
 const iso = (ms) => new Date(ms).toISOString();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -70,10 +71,10 @@ async function post(url, secret, body) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
-async function deliver(url, secret, kind, bookingId, body) {
+async function deliver({ url, secret, name }, kind, bookingId, body) {
   const { lastInsertRowid } = db
-    .prepare("INSERT INTO webhook_deliveries (booking_id, event, status, created_at) VALUES (?, ?, 'pending', ?)")
-    .run(bookingId, kind, Date.now());
+    .prepare("INSERT INTO webhook_deliveries (booking_id, event, destination, status, created_at) VALUES (?, ?, ?, 'pending', ?)")
+    .run(bookingId, kind, name, Date.now());
   const finish = db.prepare('UPDATE webhook_deliveries SET status = ?, attempts = ?, last_error = ? WHERE id = ?');
 
   let error = '';
@@ -93,17 +94,87 @@ async function deliver(url, secret, kind, bookingId, body) {
   db.prepare('DELETE FROM webhook_deliveries WHERE id <= (SELECT id FROM webhook_deliveries ORDER BY id DESC LIMIT 1 OFFSET 50)').run();
 }
 
-/** Dispara el webhook sin bloquear la reserva. Si no hay URL configurada, no hace nada. */
-export function emit(kind, booking, options) {
-  const { webhookUrl, webhookSecret } = getGlobal();
-  if (!webhookUrl) return;
-  deliver(webhookUrl, webhookSecret, kind, booking.id, buildPayload(kind, booking, options)).catch((err) => console.error('[webhook]', err.message));
+// ---------- destinos ----------
+// Varios webhooks con nombre; cada tipo de evento elige a cuál va (webhookId) o 'none'.
+// «Principal» (id 'main') siempre existe y es el destino de los eventos que no eligieron otro.
+
+export const MAIN_ID = 'main';
+const MAX_WEBHOOKS = 10;
+
+export function getWebhooks() {
+  const saved = getKv('webhooks');
+  if (saved) return JSON.parse(saved);
+  // Antes había una sola URL en los ajustes generales: pasa a ser «Principal».
+  const { webhookUrl = '', webhookSecret = '' } = getGlobal();
+  return [{ id: MAIN_ID, name: 'Principal', url: webhookUrl, secret: webhookSecret }];
 }
 
-/** Envía un payload de ejemplo (event: "test") para configurar el trigger de n8n. Devuelve { ok, error }. */
-export async function sendTest(baseUrl) {
-  const { webhookUrl, webhookSecret, ownerName } = getGlobal();
-  if (!webhookUrl) return { ok: false, error: 'Primero guardá la URL del webhook.' };
+// El panel nunca recibe los secretos, solo si hay uno guardado.
+export const safeWebhooks = () => getWebhooks().map(({ secret, ...w }) => ({ ...w, secretSet: Boolean(secret) }));
+
+function checkUrl(value, name) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (raw.length > 500) throw new SettingsError(`«${name}»: la URL tiene un máximo de 500 caracteres.`);
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new SettingsError(`«${name}»: la URL del webhook no es válida.`);
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new SettingsError(`«${name}»: la URL tiene que empezar con http:// o https://`);
+  return url.href;
+}
+
+/** input: [{ id?, name, url, secret, clearSecret }]. Un secreto vacío conserva el guardado, salvo clearSecret. */
+export function saveWebhooks(input) {
+  if (!Array.isArray(input) || !input.length || input.length > MAX_WEBHOOKS) throw new SettingsError(`Puede haber entre 1 y ${MAX_WEBHOOKS} webhooks.`);
+  const current = new Map(getWebhooks().map((w) => [w.id, w]));
+  const names = new Set();
+  const clean = input.map((w) => {
+    const id = current.has(w?.id) ? w.id : `w_${crypto.randomBytes(4).toString('hex')}`;
+    const name = String(w?.name ?? '').trim();
+    if (!name || name.length > 40) throw new SettingsError('Cada webhook necesita un nombre de hasta 40 caracteres.');
+    if (names.has(name.toLowerCase())) throw new SettingsError(`Hay dos webhooks llamados «${name}».`);
+    names.add(name.toLowerCase());
+    const secret = String(w?.secret ?? '').trim();
+    if (secret.length > 200) throw new SettingsError(`«${name}»: el secreto tiene un máximo de 200 caracteres.`);
+    return { id, name, url: checkUrl(w?.url, name), secret: secret || (w?.clearSecret ? '' : current.get(id)?.secret ?? '') };
+  });
+  if (!clean.some((w) => w.id === MAIN_ID)) throw new SettingsError('El webhook «Principal» no se puede quitar (podés dejarle la URL vacía).');
+
+  const kept = new Set(clean.map((w) => w.id));
+  for (const [id, w] of current) {
+    if (kept.has(id)) continue;
+    const users = listEvents().filter((e) => e.webhookId === id).map((e) => `«${e.title}»`);
+    if (users.length) throw new SettingsError(`No se puede quitar «${w.name}»: lo usa ${users.join(', ')}. Primero cambiá el webhook de ese evento.`);
+  }
+  setKv('webhooks', JSON.stringify(clean));
+  return safeWebhooks();
+}
+
+/** Destino de un tipo de evento: null si eligió no enviar o si ese destino no tiene URL. */
+export function webhookFor(event) {
+  const id = event?.webhookId || MAIN_ID;
+  if (id === 'none') return null;
+  const hooks = getWebhooks();
+  const hook = hooks.find((w) => w.id === id) ?? hooks.find((w) => w.id === MAIN_ID);
+  return hook?.url ? hook : null;
+}
+
+/** Dispara el webhook del tipo de evento sin bloquear la reserva. Si no corresponde enviar, no hace nada. */
+export function emit(kind, booking, options = {}) {
+  const event = options.event ?? getEvent(booking.event_type_id);
+  const hook = webhookFor(event);
+  if (!hook) return;
+  deliver(hook, kind, booking.id, buildPayload(kind, booking, { ...options, event })).catch((err) => console.error('[webhook]', err.message));
+}
+
+/** Envía un payload de ejemplo (event: "test") a un destino para configurar el trigger de n8n. Devuelve { ok, error }. */
+export async function sendTest(baseUrl, id = MAIN_ID) {
+  const hook = getWebhooks().find((w) => w.id === id);
+  if (!hook?.url) return { ok: false, error: 'Primero guardá la URL de este webhook.' };
+  const { ownerName } = getGlobal();
   const start = Date.now() + 86_400_000;
   const sample = {
     id: 'ejemplo', name: 'Ana Ejemplo', email: 'ana@example.com', tz: 'America/Argentina/Buenos_Aires', created_at: Date.now(),
@@ -113,7 +184,7 @@ export async function sendTest(baseUrl) {
   const body = buildPayload('invitee.created', sample, { baseUrl, manageUrl: `${baseUrl}/manage?t=ejemplo`, event: { slug: 'ejemplo', location: ownerName } });
   body.event = 'test';
   try {
-    await post(webhookUrl, webhookSecret, body);
+    await post(hook.url, hook.secret, body);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -121,4 +192,4 @@ export async function sendTest(baseUrl) {
 }
 
 export const listDeliveries = (limit = 10) =>
-  db.prepare('SELECT id, booking_id, event, status, attempts, last_error, created_at FROM webhook_deliveries ORDER BY id DESC LIMIT ?').all(limit).map((d) => ({ ...d }));
+  db.prepare('SELECT id, booking_id, event, destination, status, attempts, last_error, created_at FROM webhook_deliveries ORDER BY id DESC LIMIT ?').all(limit).map((d) => ({ ...d }));
