@@ -11,7 +11,7 @@ import { generateSlots } from './availability.js';
 import { sign, verify } from './tokens.js';
 import * as google from './google.js';
 import { notify } from './mail.js';
-import { emit, listDeliveries, safeWebhooks, saveWebhooks, sendTest } from './webhooks.js';
+import { buildPayload, emit, listDeliveries, safeWebhooks, saveWebhooks, sendTest } from './webhooks.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
@@ -531,6 +531,32 @@ async function handleGoogleOAuth(req, res, url) {
   throw new HttpError(404, 'No encontrado');
 }
 
+// ---------- API para n8n ----------
+
+// Reservas confirmadas de un día (en tu zona horaria), con la forma del invitado de Calendly.
+// Protegida con API_TOKEN (header «Authorization: Bearer <token>»); sin API_TOKEN no existe.
+async function dayBookings(req, url) {
+  if (!process.env.API_TOKEN) throw new HttpError(404, 'No encontrado');
+  const auth = req.headers.authorization ?? '';
+  if (!safeEqual(auth.replace(/^Bearer\s+/i, ''), process.env.API_TOKEN)) {
+    rateLimit(req, 'api', 20, 15 * 60_000);
+    throw new HttpError(401, 'No autorizado');
+  }
+  const { timezone } = getGlobal();
+  const date = url.searchParams.get('date') || DateTime.now().setZone(timezone).toISODate();
+  const day = DateTime.fromISO(date, { zone: timezone });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !day.isValid) throw new HttpError(400, 'date debe ser AAAA-MM-DD');
+  const slug = url.searchParams.get('slug');
+  await syncFromGoogle({ fresh: true });
+  const rows = db
+    .prepare("SELECT * FROM bookings WHERE status = 'confirmed' AND start_utc >= ? AND start_utc < ? ORDER BY start_utc")
+    .all(day.startOf('day').toMillis(), day.plus({ days: 1 }).startOf('day').toMillis());
+  const collection = rows
+    .map((b) => buildPayload('invitee.created', b, { baseUrl: BASE_URL, manageUrl: manageUrl(manageToken(b.id)) }).payload)
+    .filter((p) => !slug || p.scheduled_event.event_type_slug === slug);
+  return { date, timezone, count: collection.length, collection };
+}
+
 // ---------- rutas públicas ----------
 
 async function handleApi(req, res, url) {
@@ -545,6 +571,8 @@ async function handleApi(req, res, url) {
     case 'POST /api/book':
       rateLimit(req, 'book', 10, 3_600_000);
       return sendJson(res, 201, await createBooking(await readJson(req)));
+    case 'GET /api/bookings':
+      return sendJson(res, 200, await dayBookings(req, url));
     case 'GET /api/booking':
       return sendJson(res, 200, view(bookingFromToken(url.searchParams.get('t'))));
     case 'POST /api/cancel':

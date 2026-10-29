@@ -6,3 +6,4 @@
 - Tests: `npm test` (incluye e2e).
 - Login del panel: sesión de 30 días que se renueva sola con el uso (cookie HttpOnly). El formulario tiene un usuario oculto fijo («admin») y avisa a Chrome con `PasswordCredential` para que guarde bien la contraseña.
 - Sincronización desde Google Calendar: `syncFromGoogle` (server.js) hace GET de cada evento de reserva futura (como mucho 1 vez por minuto; al reservar, en fresco). Borrado → cancela; movido → reprograma; invitado rechazó → cancela y borra el evento sin avisar. Ante error de Google no toca nada.
+- API para n8n: `GET /api/bookings?date=AAAA-MM-DD[&slug=]` con `Authorization: Bearer API_TOKEN` devuelve las reservas confirmadas del día (zona del dueño) con la forma del payload del webhook. La usa el flujo de n8n «Recordatorio llamada (reservas propias)»; el viejo de Calendly no se tocó.

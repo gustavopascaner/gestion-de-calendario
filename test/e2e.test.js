@@ -6,11 +6,13 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { DateTime } from 'luxon';
 
 const PORT = 3400 + Math.floor(Math.random() * 400);
 const HOOK_PORT = PORT + 500;
 const BASE = `http://localhost:${PORT}`;
 const ADMIN_PASSWORD = 'e2e-admin-pass';
+const API_TOKEN = 'e2e-api-token';
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
 let server;
@@ -54,6 +56,8 @@ before(async () => {
       BASE_URL: BASE,
       SIGNING_SECRET: 'e2e-signing-secret-1234567890',
       ADMIN_SECRET: ADMIN_PASSWORD,
+      API_TOKEN: API_TOKEN,
+      TRUST_PROXY: '1', // permite simular otra IP para no chocar con el límite de reservas por hora
       DB_PATH: path.join(os.tmpdir(), `e2e-${process.pid}-${Date.now()}.db`),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -246,4 +250,40 @@ test('cada tipo de evento manda sus reservas a su webhook', async () => {
   assert.equal((await api('/api/admin/cancel', { method: 'POST', admin: true, body: { id: booked.data.id ?? (await api(`/api/booking?t=${booked.data.token}`)).data.id } })).status, 200);
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(received.length, 0);
+});
+
+test('API para n8n: reservas del día con la forma de Calendly', async () => {
+  const bearer = { headers: { authorization: `Bearer ${API_TOKEN}` } };
+  assert.equal((await api('/api/bookings')).status, 401);
+  assert.equal((await api('/api/bookings', { headers: { authorization: 'Bearer otra' } })).status, 401);
+  assert.equal((await api('/api/bookings?date=29-10-2026', bearer)).status, 400);
+
+  const { timezone } = (await api('/api/admin/settings', { admin: true })).data.global;
+  const start = (await api('/api/slots?slug=llamada-corta')).data.slots.at(-1);
+  const fieldId = (await api('/api/event?slug=llamada-corta')).data.fields[0].id;
+  const otherIp = { 'x-forwarded-for': '203.0.113.7' };
+  const booked = await api('/api/book', {
+    method: 'POST',
+    headers: otherIp,
+    body: { slug: 'llamada-corta', name: 'Carla Díaz', email: 'carla@example.com', start, answers: { [fieldId]: '+54 11 5555-1234' } },
+  });
+  assert.equal(booked.status, 201);
+
+  const date = DateTime.fromMillis(start, { zone: timezone }).toISODate();
+  const day = (await api(`/api/bookings?date=${date}`, bearer)).data;
+  assert.equal(day.date, date);
+  const item = day.collection.find((b) => b.email === 'carla@example.com');
+  assert.ok(item, 'la reserva debería aparecer en su día');
+  assert.equal(item.name, 'Carla Díaz');
+  assert.equal(item.scheduled_event.start_time, new Date(start).toISOString());
+  assert.equal(item.scheduled_event.event_type_slug, 'llamada-corta');
+  assert.deepEqual(item.questions_and_answers, [{ question: 'WhatsApp', answer: '+54 11 5555-1234', position: 0 }]);
+  assert.match(item.cancel_url, /\/manage\?t=/);
+
+  // filtro por evento, otro día y canceladas
+  assert.equal((await api(`/api/bookings?date=${date}&slug=reunion`, bearer)).data.collection.some((b) => b.email === 'carla@example.com'), false);
+  const next = DateTime.fromISO(date).plus({ days: 1 }).toISODate();
+  assert.equal((await api(`/api/bookings?date=${next}`, bearer)).data.collection.some((b) => b.email === 'carla@example.com'), false);
+  assert.equal((await api('/api/cancel', { method: 'POST', headers: otherIp, body: { t: booked.data.token } })).status, 200);
+  assert.equal((await api(`/api/bookings?date=${date}`, bearer)).data.collection.some((b) => b.email === 'carla@example.com'), false);
 });

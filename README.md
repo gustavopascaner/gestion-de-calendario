@@ -101,6 +101,20 @@ Campos principales de `payload`: `booking_id`, `name`, `first_name`, `last_name`
 - **Seguridad:** si definís un secreto, se envía en el header `X-Webhook-Secret`; en n8n podés validarlo con *Authentication → Header Auth* en el nodo Webhook.
 - **Reintentos:** si n8n no responde 2xx, se reintenta a los 2 s, 10 s y 60 s. El panel muestra los últimos envíos con su estado. El webhook nunca bloquea ni hace fallar la reserva.
 
+## API para n8n: reservas del día
+
+Para flujos que corren a una hora fija (p. ej. recordatorios de la mañana), en vez de esperar el webhook:
+
+```
+GET /api/bookings?date=2026-10-29            (sin date = hoy)
+GET /api/bookings?date=2026-10-29&slug=reunion  (solo ese evento)
+Authorization: Bearer <API_TOKEN>
+```
+
+- Definí `API_TOKEN` en `.env` (sin ella el endpoint no existe). En n8n: HTTP Request con *Authentication → Generic → Header Auth*, nombre `Authorization`, valor `Bearer <API_TOKEN>`.
+- El día se cuenta en tu zona horaria (la de **General**). Devuelve solo reservas confirmadas, ordenadas por horario, y antes revisa Google Calendar para no traer las que borraste o movieron.
+- Respuesta: `{ date, timezone, count, collection }`. Cada elemento de `collection` es igual al `payload` del webhook (forma de invitado de Calendly): `name`, `email`, `questions_and_answers`, `scheduled_event.start_time`, `scheduled_event.location.join_url`, `cancel_url`, `reschedule_url`, etc.
+
 ## Embeber en una landing
 
 ```html
