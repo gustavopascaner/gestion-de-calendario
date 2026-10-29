@@ -111,7 +111,7 @@ GET /api/bookings?date=2026-10-29&slug=reunion  (solo ese evento)
 Authorization: Bearer <API_TOKEN>
 ```
 
-- Definí `API_TOKEN` en `.env` (sin ella el endpoint no existe). En n8n: HTTP Request con *Authentication → Generic → Header Auth*, nombre `Authorization`, valor `Bearer <API_TOKEN>`.
+- Definí `API_TOKEN` en `.env` (sin ella el endpoint no existe). En n8n: HTTP Request con *Authentication → Generic → Bearer Auth* y la clave como token. El flujo «Recordatorio llamada (reservas propias)» ya lo usa con la credencial «Reservas Mister Robot».
 - El día se cuenta en tu zona horaria (la de **General**). Devuelve solo reservas confirmadas, ordenadas por horario, y antes revisa Google Calendar para no traer las que borraste o movieron.
 - Respuesta: `{ date, timezone, count, collection }`. Cada elemento de `collection` es igual al `payload` del webhook (forma de invitado de Calendly): `name`, `email`, `questions_and_answers`, `scheduled_event.start_time`, `scheduled_event.location.join_url`, `cancel_url`, `reschedule_url`, etc.
 
