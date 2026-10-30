@@ -1,6 +1,7 @@
 import { $, el, api, fmtLong, applyTheme, tzLabel, reportHeight } from './common.js';
 import { mountPicker } from './picker.js';
 import { initPixel, trackPixel } from './pixel.js';
+import es from './vendor/intl-tel-input/js/es.js';
 
 const card = $('.card');
 const info = $('#info');
@@ -10,12 +11,6 @@ const stage = $('#stage');
 const slugFromPath = location.pathname.split('/').filter(Boolean)[1] ?? null;
 
 // Parámetros utm_* del link (p. ej. /book/reunion?utm_source=instagram): viajan con la reserva hasta el webhook.
-// Países del selector del teléfono (el primero es el que viene elegido). '' = el número ya trae su +código.
-const COUNTRIES = [
-  ['54', 'Argentina'], ['598', 'Uruguay'], ['56', 'Chile'], ['595', 'Paraguay'], ['591', 'Bolivia'], ['51', 'Perú'],
-  ['57', 'Colombia'], ['593', 'Ecuador'], ['58', 'Venezuela'], ['52', 'México'], ['55', 'Brasil'], ['34', 'España'],
-  ['1', 'EE. UU./Canadá'], ['', 'Otro (escribí +código)'],
-];
 const tracking = Object.fromEntries([...new URLSearchParams(location.search)].filter(([key]) => key.startsWith('utm_')));
 
 function showMessage(text) {
@@ -112,33 +107,63 @@ async function showEvent(slug) {
 
   function fieldControl(f) {
     const common = { name: f.id, ...(f.required && f.type !== 'checkbox' ? { required: true } : {}) };
+    if (f.type === 'tel') return phoneControl(f);
     if (f.type === 'textarea') return el('textarea', { ...common, rows: '3', maxlength: '2000', placeholder: f.placeholder || false });
     if (f.type === 'select') {
       return el('select', common, el('option', { value: '' }, 'Elegí una opción…'), ...f.options.map((o) => el('option', { value: o }, o)));
     }
-    if (f.type === 'tel') {
-      return el(
-        'div',
-        { class: 'phone' },
-        el('select', { name: `${f.id}__cc`, 'aria-label': 'País', autocomplete: 'tel-country-code' }, ...COUNTRIES.map(([cc, name]) => el('option', { value: cc }, cc ? `${name} +${cc}` : name))),
-        el('input', { ...common, type: 'tel', inputmode: 'tel', autocomplete: 'tel-national', pattern: '\\+?[0-9 ()\\-.]{6,25}', title: 'Código de área y número, por ejemplo 11 2345-6789', maxlength: '300', placeholder: f.placeholder || '11 2345-6789' }),
-      );
-    }
     return el('input', { ...common, type: 'text', maxlength: '300', placeholder: f.placeholder || false });
   }
 
-  // Une el país elegido con el número: "54" + "011 15 2345-6789" → "+54 11 15 2345-6789" (el servidor quita el 0 y el 15).
-  function phoneValue(form, f) {
-    const number = String(form.elements[f.id].value).trim();
-    const cc = form.elements[`${f.id}__cc`].value;
-    if (!number || number.startsWith('+') || !cc) return number;
-    return `+${cc} ${number.replace(/^0+/, '')}`;
+  // Teléfono como el de Calendly: bandera con buscador, código del país fijo al lado, formato mientras se escribe
+  // y validación con libphonenumber (intl-tel-input, cargado en book.html). Devuelve el número en formato +54….
+  const phones = new Map();
+  const PHONE_ERRORS = { INVALID_COUNTRY_CODE: 'Elegí el país del número.', TOO_SHORT: 'Al número le faltan dígitos.', IS_POSSIBLE_LOCAL_ONLY: 'Agregá el código de área (por ejemplo 11).', TOO_LONG: 'El número tiene dígitos de más.' };
+
+  function phoneControl(f) {
+    const input = el('input', { name: f.id, id: `f-${f.id}`, type: 'tel', autocomplete: 'tel', maxlength: '30', ...(f.required ? { required: true } : {}) });
+    const box = el('div', { class: 'phone' }, input);
+    const iti = window.intlTelInput(input, {
+      initialCountry: 'ar',
+      countryOrder: ['ar', 'uy', 'cl', 'py', 'bo', 'pe', 'co', 'ec', 've', 'mx', 'br', 'es', 'us'],
+      separateDialCode: true,
+      countrySearch: true,
+      countryNameLocale: 'es',
+      uiTranslations: es,
+      // En Argentina el ejemplo oficial es "011 15-2345-6789"; mostramos cómo lo escribe la gente.
+      customPlaceholder: (example, country) => (country?.iso2 === 'ar' ? '11 2345-6789' : example),
+    });
+    // Si escribió el código del país de nuevo (Argentina +54 y "54 11 …"), lo saca.
+    const fix = () => {
+      const digits = input.value.replace(/\D/g, '');
+      const dial = iti.getSelectedCountry()?.dialCode;
+      if (dial && digits.startsWith(dial) && !iti.isValidNumber()) {
+        iti.setNumber(`+${digits}`);
+        if (!iti.isValidNumber()) iti.setNumber(input.value); // no era eso: lo deja como estaba
+      }
+    };
+    const check = () => {
+      fix();
+      if (!input.value.trim()) return '';
+      return iti.isValidNumber() ? '' : PHONE_ERRORS[iti.getValidationError()] || 'Revisá el número: no parece válido.';
+    };
+    input.addEventListener('blur', () => {
+      const msg = check();
+      input.setCustomValidity(msg);
+      box.classList.toggle('invalid', Boolean(msg));
+    });
+    input.addEventListener('input', () => {
+      input.setCustomValidity('');
+      box.classList.remove('invalid');
+    });
+    phones.set(f.id, { iti, input, check });
+    return box;
   }
 
   function buildForm() {
     const error = el('p', { class: 'error', role: 'alert' });
     const submit = el('button', { type: 'submit', class: 'primary' }, 'Confirmar reserva');
-    const names = ['name', 'email', ...event.fields.flatMap((f) => (f.type === 'tel' ? [`${f.id}__cc`, f.id] : [f.id]))];
+    const names = ['name', 'email', ...event.fields.map((f) => f.id)];
 
     const form = el(
       'form',
@@ -147,10 +172,19 @@ async function showEvent(slug) {
         onsubmit: async (e) => {
           e.preventDefault();
           error.textContent = '';
+          for (const f of event.fields.filter((f) => f.type === 'tel')) {
+            const { input, check } = phones.get(f.id);
+            const msg = check();
+            if (msg) {
+              error.textContent = `«${f.label}»: ${msg}`;
+              input.focus();
+              return;
+            }
+          }
           submit.disabled = true;
           const data = new FormData(form);
           const answers = {};
-          for (const f of event.fields) answers[f.id] = f.type === 'checkbox' ? form.elements[f.id].checked : f.type === 'tel' ? phoneValue(form, f) : data.get(f.id);
+          for (const f of event.fields) answers[f.id] = f.type === 'checkbox' ? form.elements[f.id].checked : f.type === 'tel' ? phones.get(f.id).iti.getNumber() || data.get(f.id) : data.get(f.id);
           try {
             const { token, redirectUrl } = await api('/api/book', {
               method: 'POST',
@@ -181,7 +215,9 @@ async function showEvent(slug) {
       ...event.fields.map((f) =>
         f.type === 'checkbox'
           ? el('label', { class: 'check' }, el('input', { name: f.id, type: 'checkbox' }), el('span', { class: f.required ? 'req' : '' }, f.label))
-          : el('label', {}, el('span', { class: f.required ? 'req' : '' }, f.label), fieldControl(f)),
+          : f.type === 'tel'
+            ? el('div', { class: 'field' }, el('label', { for: `f-${f.id}` }, el('span', { class: f.required ? 'req' : '' }, f.label)), fieldControl(f))
+            : el('label', {}, el('span', { class: f.required ? 'req' : '' }, f.label), fieldControl(f)),
       ),
       error,
       el('div', { class: 'actions' }, submit),
@@ -190,13 +226,14 @@ async function showEvent(slug) {
     function saveDraft() {
       for (const name of names) {
         const input = form.elements[name];
-        draft[name] = input.type === 'checkbox' ? input.checked : input.value;
+        draft[name] = input.type === 'checkbox' ? input.checked : phones.has(name) ? phones.get(name).iti.getNumber() || input.value : input.value;
       }
     }
     for (const name of names) {
       if (!(name in draft)) continue;
       const input = form.elements[name];
       if (input.type === 'checkbox') input.checked = draft[name];
+      else if (phones.has(name)) phones.get(name).iti.setNumber(draft[name]);
       else input.value = draft[name];
     }
     return form;

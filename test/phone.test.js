@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizePhone } from '../src/phone.js';
+import { normalizePhone, parsePhone } from '../src/phone.js';
 
 test('deja los teléfonos como los guarda WhatsApp', () => {
   const casos = {
@@ -17,4 +17,13 @@ test('deja los teléfonos como los guarda WhatsApp', () => {
     '59899123456': '+59899123456',
   };
   for (const [entrada, salida] of Object.entries(casos)) assert.equal(normalizePhone(entrada), salida, entrada);
+});
+
+test('valida con libphonenumber', () => {
+  assert.equal(parsePhone('+54 11 6549-6243'), '+5491165496243');
+  assert.equal(parsePhone('1131462156'), '+5491131462156');
+  assert.equal(parsePhone('+598 99 123 456'), '+59899123456');
+  assert.equal(parsePhone('+54 54 11 6549-6243'), null); // código repetido
+  assert.equal(parsePhone('12345'), null);
+  assert.equal(parsePhone('hola'), null);
 });

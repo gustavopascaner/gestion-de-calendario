@@ -9,7 +9,7 @@ import { DEFAULT_EVENT, SettingsError, getGlobal, saveGlobal } from './settings.
 import { createEvent, deleteEvent, duplicateEvent, getEvent, getEventBySlug, listEvents, reorderEvents, seedEvents, updateEvent } from './events.js';
 import { generateSlots } from './availability.js';
 import { sign, verify } from './tokens.js';
-import { normalizePhone } from './phone.js';
+import { parsePhone } from './phone.js';
 import * as google from './google.js';
 import { notify } from './mail.js';
 import { buildPayload, emit, listDeliveries, safeWebhooks, saveWebhooks, sendTest } from './webhooks.js';
@@ -136,7 +136,7 @@ async function availableSlots(event, { fresh = false, excludeId = '' } = {}) {
 
 // ---------- helpers HTTP ----------
 
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.ico': 'image/x-icon' };
 
 function setSecurityHeaders(res) {
   const ancestors = EMBED === '*' ? '*' : ["'self'", ...EMBED.split(/[\s,]+/).filter(Boolean)].join(' ');
@@ -283,13 +283,12 @@ function parseAnswers(fields, raw) {
     }
     if (value.length > (f.type === 'textarea' ? 2000 : 300)) throw new HttpError(400, `«${f.label}» es demasiado largo.`);
     if (f.type === 'select' && !f.options.includes(value)) throw new HttpError(400, `Elegí una opción válida en «${f.label}».`);
-    if (f.type === 'tel' && !isPhone(value)) throw new HttpError(400, `Ingresá un teléfono válido en «${f.label}».`);
-    answers.push({ id: f.id, label: f.label, value: f.type === 'tel' ? normalizePhone(value) : value });
+    const phone = f.type === 'tel' ? parsePhone(value) : null;
+    if (f.type === 'tel' && !phone) throw new HttpError(400, `Ingresá un teléfono válido en «${f.label}».`);
+    answers.push({ id: f.id, label: f.label, value: phone ?? value });
   }
   return answers;
 }
-
-const isPhone = (v) => /^\+?[0-9 ()\-.]{7,25}$/.test(v) && v.replace(/\D/g, '').length >= 7 && v.replace(/\D/g, '').length <= 15;
 
 async function createBooking(body) {
   const event = activeEvent(body.slug);

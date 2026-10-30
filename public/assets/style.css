@@ -123,9 +123,15 @@ form.booking { display: grid; gap: 14px; max-width: 460px; }
 label { display: grid; gap: 4px; font-size: 0.9rem; font-weight: 600; }
 label.check { display: flex; gap: 8px; align-items: flex-start; font-weight: 400; }
 label.check input { margin-top: 4px; }
-.phone { display: flex; gap: 8px; }
-.phone select { width: auto; max-width: 45%; flex: none; }
-.phone input { flex: 1; min-width: 0; }
+.field { display: grid; gap: 4px; }
+.field > label { display: block; }
+/* Teléfono (intl-tel-input): mismo aspecto que el resto de los campos */
+:root { --iti-border-color: var(--border); --iti-country-selector-bg: var(--bg); --iti-hover-color: var(--tint); --iti-icon-color: var(--muted); }
+.phone .iti { display: block; width: 100%; }
+.iti button.iti__selected-country { padding: 0; border: 0; border-radius: 8px 0 0 8px; background: transparent; }
+.iti__country-selector { border-radius: 8px; overflow: hidden; color: var(--fg); font-size: 0.95rem; }
+.iti .iti__search-input { border: 0; border-radius: 0; }
+.phone.invalid input { border-color: var(--danger); }
 .req::after { content: ' *'; color: var(--danger); }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
 .details { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 16px 0; }

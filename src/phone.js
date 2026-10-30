@@ -1,7 +1,10 @@
+import { parsePhoneNumberFromString } from 'libphonenumber-js/max';
+
 // Teléfonos en formato internacional compacto, como los guarda WhatsApp/Chatwoot:
 //   +54 11 6549-6243 / 11 15 6549-6243 / 011 6549-6243 / 1165496243 → +5491165496243
 //   +598 99 123-456 → +59899123456
 // Sin código de país (10 dígitos o empieza con 0) se asume Argentina.
+// Antes se valida con libphonenumber (lo mismo que usa el formulario con intl-tel-input).
 // El flujo de n8n «Recordatorio llamada (reservas propias)» usa la misma lógica.
 
 // Posición del 15 en un número nacional de 12 dígitos (área + 15 + abonado), o 0.
@@ -32,4 +35,12 @@ export function normalizePhone(text) {
     return '+' + n; // ya trae otro código de país
   }
   return '+549' + nacionalAR(n);
+}
+
+// Número válido normalizado, o null si no es un teléfono real. Sin + se asume Argentina.
+export function parsePhone(text) {
+  const raw = String(text).trim();
+  if (!/^\+?[0-9 ()\-.]{6,30}$/.test(raw)) return null;
+  const phone = parsePhoneNumberFromString(raw, 'AR');
+  return phone?.isValid() ? normalizePhone(phone.number) : null;
 }
