@@ -9,6 +9,7 @@ import { DEFAULT_EVENT, SettingsError, getGlobal, saveGlobal } from './settings.
 import { createEvent, deleteEvent, duplicateEvent, getEvent, getEventBySlug, listEvents, reorderEvents, seedEvents, updateEvent } from './events.js';
 import { generateSlots } from './availability.js';
 import { sign, verify } from './tokens.js';
+import { normalizePhone } from './phone.js';
 import * as google from './google.js';
 import { notify } from './mail.js';
 import { buildPayload, emit, listDeliveries, safeWebhooks, saveWebhooks, sendTest } from './webhooks.js';
@@ -283,7 +284,7 @@ function parseAnswers(fields, raw) {
     if (value.length > (f.type === 'textarea' ? 2000 : 300)) throw new HttpError(400, `«${f.label}» es demasiado largo.`);
     if (f.type === 'select' && !f.options.includes(value)) throw new HttpError(400, `Elegí una opción válida en «${f.label}».`);
     if (f.type === 'tel' && !isPhone(value)) throw new HttpError(400, `Ingresá un teléfono válido en «${f.label}».`);
-    answers.push({ id: f.id, label: f.label, value });
+    answers.push({ id: f.id, label: f.label, value: f.type === 'tel' ? normalizePhone(value) : value });
   }
   return answers;
 }

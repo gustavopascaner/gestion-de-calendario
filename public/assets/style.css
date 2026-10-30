@@ -123,6 +123,9 @@ form.booking { display: grid; gap: 14px; max-width: 460px; }
 label { display: grid; gap: 4px; font-size: 0.9rem; font-weight: 600; }
 label.check { display: flex; gap: 8px; align-items: flex-start; font-weight: 400; }
 label.check input { margin-top: 4px; }
+.phone { display: flex; gap: 8px; }
+.phone select { width: auto; max-width: 45%; flex: none; }
+.phone input { flex: 1; min-width: 0; }
 .req::after { content: ' *'; color: var(--danger); }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
 .details { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 16px 0; }

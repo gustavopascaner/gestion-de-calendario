@@ -10,6 +10,12 @@ const stage = $('#stage');
 const slugFromPath = location.pathname.split('/').filter(Boolean)[1] ?? null;
 
 // Parámetros utm_* del link (p. ej. /book/reunion?utm_source=instagram): viajan con la reserva hasta el webhook.
+// Países del selector del teléfono (el primero es el que viene elegido). '' = el número ya trae su +código.
+const COUNTRIES = [
+  ['54', 'Argentina'], ['598', 'Uruguay'], ['56', 'Chile'], ['595', 'Paraguay'], ['591', 'Bolivia'], ['51', 'Perú'],
+  ['57', 'Colombia'], ['593', 'Ecuador'], ['58', 'Venezuela'], ['52', 'México'], ['55', 'Brasil'], ['34', 'España'],
+  ['1', 'EE. UU./Canadá'], ['', 'Otro (escribí +código)'],
+];
 const tracking = Object.fromEntries([...new URLSearchParams(location.search)].filter(([key]) => key.startsWith('utm_')));
 
 function showMessage(text) {
@@ -110,13 +116,29 @@ async function showEvent(slug) {
     if (f.type === 'select') {
       return el('select', common, el('option', { value: '' }, 'Elegí una opción…'), ...f.options.map((o) => el('option', { value: o }, o)));
     }
-    return el('input', { ...common, type: f.type === 'tel' ? 'tel' : 'text', ...(f.type === 'tel' ? { inputmode: 'tel', autocomplete: 'tel', pattern: '\\+?[0-9 ()\\-.]{7,25}', title: 'Ingresá un teléfono válido, por ejemplo +54 9 11 1234-5678' } : {}), maxlength: '300', placeholder: f.placeholder || false });
+    if (f.type === 'tel') {
+      return el(
+        'div',
+        { class: 'phone' },
+        el('select', { name: `${f.id}__cc`, 'aria-label': 'País', autocomplete: 'tel-country-code' }, ...COUNTRIES.map(([cc, name]) => el('option', { value: cc }, cc ? `${name} +${cc}` : name))),
+        el('input', { ...common, type: 'tel', inputmode: 'tel', autocomplete: 'tel-national', pattern: '\\+?[0-9 ()\\-.]{6,25}', title: 'Código de área y número, por ejemplo 11 2345-6789', maxlength: '300', placeholder: f.placeholder || '11 2345-6789' }),
+      );
+    }
+    return el('input', { ...common, type: 'text', maxlength: '300', placeholder: f.placeholder || false });
+  }
+
+  // Une el país elegido con el número: "54" + "011 15 2345-6789" → "+54 11 15 2345-6789" (el servidor quita el 0 y el 15).
+  function phoneValue(form, f) {
+    const number = String(form.elements[f.id].value).trim();
+    const cc = form.elements[`${f.id}__cc`].value;
+    if (!number || number.startsWith('+') || !cc) return number;
+    return `+${cc} ${number.replace(/^0+/, '')}`;
   }
 
   function buildForm() {
     const error = el('p', { class: 'error', role: 'alert' });
     const submit = el('button', { type: 'submit', class: 'primary' }, 'Confirmar reserva');
-    const names = ['name', 'email', ...event.fields.map((f) => f.id)];
+    const names = ['name', 'email', ...event.fields.flatMap((f) => (f.type === 'tel' ? [`${f.id}__cc`, f.id] : [f.id]))];
 
     const form = el(
       'form',
@@ -128,7 +150,7 @@ async function showEvent(slug) {
           submit.disabled = true;
           const data = new FormData(form);
           const answers = {};
-          for (const f of event.fields) answers[f.id] = f.type === 'checkbox' ? form.elements[f.id].checked : data.get(f.id);
+          for (const f of event.fields) answers[f.id] = f.type === 'checkbox' ? form.elements[f.id].checked : f.type === 'tel' ? phoneValue(form, f) : data.get(f.id);
           try {
             const { token, redirectUrl } = await api('/api/book', {
               method: 'POST',

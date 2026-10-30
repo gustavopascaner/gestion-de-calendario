@@ -176,7 +176,7 @@ test('flujo completo: reservar → agenda compartida → reprogramar → cancela
   assert.equal(view.tz, 'Europe/Madrid');
   assert.equal(view.status, 'confirmed');
   assert.equal(view.end - view.start, 15 * 60_000);
-  assert.deepEqual(view.answers.map((a) => a.value), ['+34 600 000 000']);
+  assert.deepEqual(view.answers.map((a) => a.value), ['+34600000000']); // teléfono normalizado
 
   // no se puede reservar dos veces el mismo horario, y la agenda se comparte entre eventos
   assert.equal((await api('/api/book', { method: 'POST', body: { slug: 'llamada-corta', name: 'Bob', email: 'bob@example.com', start, answers: { [fieldId]: '1155551234' } } })).status, 409);
@@ -207,7 +207,7 @@ test('flujo completo: reservar → agenda compartida → reprogramar → cancela
   assert.equal(created.timezone, 'Europe/Madrid');
   assert.equal(created.scheduled_event.start_time, new Date(start).toISOString());
   assert.equal(created.tracking.utm_source, 'instagram');
-  assert.deepEqual(created.questions_and_answers, [{ question: 'WhatsApp', answer: '+34 600 000 000', position: 0 }]);
+  assert.deepEqual(created.questions_and_answers, [{ question: 'WhatsApp', answer: '+34600000000', position: 0 }]);
   assert.equal(received[1].body.payload.old_start_time, new Date(start).toISOString());
   assert.ok(received.every((r) => r.secret === 'secreto-e2e'));
 });
@@ -277,7 +277,7 @@ test('API para n8n: reservas del día con la forma de Calendly', async () => {
   assert.equal(item.name, 'Carla Díaz');
   assert.equal(item.scheduled_event.start_time, new Date(start).toISOString());
   assert.equal(item.scheduled_event.event_type_slug, 'llamada-corta');
-  assert.deepEqual(item.questions_and_answers, [{ question: 'WhatsApp', answer: '+54 11 5555-1234', position: 0 }]);
+  assert.deepEqual(item.questions_and_answers, [{ question: 'WhatsApp', answer: '+5491155551234', position: 0 }]);
   assert.match(item.cancel_url, /\/manage\?t=/);
 
   // filtro por evento, otro día y canceladas
