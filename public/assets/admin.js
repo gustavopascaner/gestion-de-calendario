@@ -381,38 +381,86 @@ function panelInicio() {
   return box;
 }
 
+// Minúsculas y sin acentos, para que «garcia» encuentre «García».
+const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
 function panelReservas() {
-  const box = el('div', { class: 'panel' }, el('p', { class: 'muted' }, 'Cargando…'));
-  (async () => {
-    let bookings;
-    try {
-      bookings = (await api('/api/admin/bookings')).bookings;
-    } catch (err) {
-      box.replaceChildren(el('p', { class: 'error' }, err.message));
-      return;
-    }
-    if (!bookings.length) return box.replaceChildren(el('p', { class: 'muted' }, 'Todavía no hay reservas próximas.'));
-    box.replaceChildren(
+  const box = el('div', { class: 'panel' });
+  const q = el('input', { type: 'search', placeholder: 'Nombre, email, teléfono o respuesta…' });
+  const evSel = el('select', {}, el('option', { value: '' }, 'Todos los eventos'));
+  const stSel = el('select', {},
+    el('option', { value: '' }, 'Todos los estados'),
+    el('option', { value: 'confirmed' }, 'Confirmadas'),
+    el('option', { value: 'cancelled' }, 'Canceladas'));
+  const scopeSel = el('select', {},
+    el('option', { value: '' }, 'Próximas'),
+    el('option', { value: 'all' }, 'Todas (incluye pasadas)'));
+  const count = el('p', { class: 'muted' });
+  const list = el('div', {}, el('p', { class: 'muted' }, 'Cargando…'));
+  box.append(
+    el('div', { class: 'row' }, field('Buscar', q), field('Evento', evSel), field('Estado', stSel), field('Mostrar', scopeSel)),
+    count,
+    list,
+  );
+
+  let bookings = [];
+  const row = (b) => {
+    const btn = el('button', { type: 'button', class: 'danger' }, 'Cancelar');
+    btn.onclick = async () => {
+      if (btn.dataset.armed !== '1') { btn.dataset.armed = '1'; btn.textContent = '¿Seguro?'; return; }
+      btn.disabled = true;
+      try { await api('/api/admin/cancel', { method: 'POST', body: { id: b.id } }); load(); } catch (err) { btn.textContent = err.message; }
+    };
+    return el('tr', {},
+      el('td', {}, fmtLong(b.start, G.timezone), el('br'), b.status === 'cancelled' ? el('span', { class: 'badge off' }, 'Cancelada') : el('span', { class: 'badge' }, 'Confirmada')),
+      el('td', {}, b.title),
+      el('td', {}, b.name, el('br'), el('a', { href: `mailto:${b.email}` }, b.email)),
+      el('td', {}, ...b.answers.map((a) => el('div', {}, el('span', { class: 'muted' }, `${a.label}: `), a.value))),
+      el('td', {}, b.status === 'confirmed' && b.end > Date.now() ? btn : null),
+    );
+  };
+
+  const render = () => {
+    const words = norm(q.value).split(/\s+/).filter(Boolean);
+    const shown = bookings.filter((b) => {
+      if (evSel.value && b.title !== evSel.value) return false;
+      if (stSel.value && b.status !== stSel.value) return false;
+      if (!words.length) return true;
+      const text = norm([b.name, b.email, b.title, ...b.answers.map((a) => a.value)].join(' '));
+      const digits = text.replace(/\D/g, '');
+      // Cada palabra tiene que aparecer; los números también se comparan sin espacios ni guiones (teléfonos).
+      return words.every((w) => text.includes(w) || (/\d/.test(w) && digits.includes(w.replace(/\D/g, ''))));
+    });
+    count.textContent = bookings.length ? `${shown.length} de ${bookings.length} reservas` : '';
+    if (!bookings.length) return list.replaceChildren(el('p', { class: 'muted' }, scopeSel.value ? 'Todavía no hay reservas.' : 'Todavía no hay reservas próximas.'));
+    if (!shown.length) return list.replaceChildren(el('p', { class: 'muted' }, 'Ninguna reserva coincide con la búsqueda.'));
+    list.replaceChildren(
       el('table', {},
         el('thead', {}, el('tr', {}, ...['Cuándo', 'Evento', 'Quién', 'Respuestas', ''].map((h) => el('th', {}, h)))),
-        el('tbody', {}, ...bookings.map((b) => {
-          const btn = el('button', { type: 'button', class: 'danger' }, 'Cancelar');
-          btn.onclick = async () => {
-            if (btn.dataset.armed !== '1') { btn.dataset.armed = '1'; btn.textContent = '¿Seguro?'; return; }
-            btn.disabled = true;
-            try { await api('/api/admin/cancel', { method: 'POST', body: { id: b.id } }); renderShell(); } catch (err) { btn.textContent = err.message; }
-          };
-          return el('tr', {},
-            el('td', {}, fmtLong(b.start, G.timezone), el('br'), b.status === 'cancelled' ? el('span', { class: 'badge off' }, 'Cancelada') : el('span', { class: 'badge' }, 'Confirmada')),
-            el('td', {}, b.title),
-            el('td', {}, b.name, el('br'), el('a', { href: `mailto:${b.email}` }, b.email)),
-            el('td', {}, ...b.answers.map((a) => el('div', {}, el('span', { class: 'muted' }, `${a.label}: `), a.value))),
-            el('td', {}, b.status === 'confirmed' ? btn : null),
-          );
-        })),
+        el('tbody', {}, ...shown.map(row)),
       ),
     );
-  })();
+  };
+
+  const load = async () => {
+    try {
+      bookings = (await api(`/api/admin/bookings${scopeSel.value ? `?scope=${scopeSel.value}` : ''}`)).bookings;
+    } catch (err) {
+      list.replaceChildren(el('p', { class: 'error' }, err.message));
+      return;
+    }
+    const keep = evSel.value;
+    const titles = [...new Set([...events.map((e) => e.title), ...bookings.map((b) => b.title)])].sort();
+    evSel.replaceChildren(el('option', { value: '' }, 'Todos los eventos'), ...titles.map((t) => el('option', { value: t }, t)));
+    evSel.value = titles.includes(keep) ? keep : '';
+    render();
+  };
+
+  q.oninput = render;
+  evSel.onchange = render;
+  stSel.onchange = render;
+  scopeSel.onchange = () => { list.replaceChildren(el('p', { class: 'muted' }, 'Cargando…')); load(); };
+  load();
   return box;
 }
 

@@ -495,9 +495,12 @@ async function handleAdminApi(req, res, url) {
     case 'GET /api/admin/bookings': {
       await syncFromGoogle();
       const now = Date.now();
-      const rows = db
-        .prepare("SELECT * FROM bookings WHERE (status = 'confirmed' AND end_utc > ?) OR (status = 'cancelled' AND created_at > ?) ORDER BY start_utc")
-        .all(now, now - 30 * 86_400_000);
+      // scope=all: todo el historial (más recientes primero), para buscar reservas pasadas.
+      const rows = url.searchParams.get('scope') === 'all'
+        ? db.prepare('SELECT * FROM bookings ORDER BY start_utc DESC').all()
+        : db
+            .prepare("SELECT * FROM bookings WHERE (status = 'confirmed' AND end_utc > ?) OR (status = 'cancelled' AND created_at > ?) ORDER BY start_utc")
+            .all(now, now - 30 * 86_400_000);
       return sendJson(res, 200, { bookings: rows.map(view) });
     }
     case 'POST /api/admin/cancel': {
