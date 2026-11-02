@@ -1,4 +1,5 @@
 import { $, el, api, fmtLong } from './common.js';
+import { xlsxBlob } from './xlsx.js';
 
 const DAYS = [['mon', 'Lunes'], ['tue', 'Martes'], ['wed', 'Miércoles'], ['thu', 'Jueves'], ['fri', 'Viernes'], ['sat', 'Sábado'], ['sun', 'Domingo']];
 const TYPES = [['text', 'Texto corto'], ['textarea', 'Texto largo'], ['tel', 'Teléfono'], ['select', 'Lista desplegable'], ['checkbox', 'Casilla (sí/no)']];
@@ -383,6 +384,17 @@ function panelInicio() {
 
 // Minúsculas y sin acentos, para que «garcia» encuentre «García».
 const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+// Día AAAA-MM-DD y hora HH:MM de un instante, en la zona del dueño.
+const ymd = (ms, tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(ms);
+const hm = (ms, tz) => new Intl.DateTimeFormat('es', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(ms);
+
+function download(filename, blob) {
+  const a = el('a', { href: URL.createObjectURL(blob), download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 
 function panelReservas() {
   const box = el('div', { class: 'panel' });
@@ -395,15 +407,20 @@ function panelReservas() {
   const scopeSel = el('select', {},
     el('option', { value: '' }, 'Próximas'),
     el('option', { value: 'all' }, 'Todas (incluye pasadas)'));
-  const count = el('p', { class: 'muted' });
+  const from = el('input', { type: 'date' });
+  const to = el('input', { type: 'date' });
+  const exportBtn = el('button', { type: 'button' }, 'Exportar a Excel');
+  const count = el('span', { class: 'muted' });
   const list = el('div', {}, el('p', { class: 'muted' }, 'Cargando…'));
   box.append(
-    el('div', { class: 'row' }, field('Buscar', q), field('Evento', evSel), field('Estado', stSel), field('Mostrar', scopeSel)),
-    count,
+    el('div', { class: 'row' }, field('Buscar', q), field('Evento', evSel), field('Estado', stSel)),
+    el('div', { class: 'row' }, field('Desde', from), field('Hasta', to), field('Mostrar', scopeSel)),
+    el('div', { class: 'actions spread' }, count, exportBtn),
     list,
   );
 
   let bookings = [];
+  let shown = [];
   const row = (b) => {
     const btn = el('button', { type: 'button', class: 'danger' }, 'Cancelar');
     btn.onclick = async () => {
@@ -422,9 +439,12 @@ function panelReservas() {
 
   const render = () => {
     const words = norm(q.value).split(/\s+/).filter(Boolean);
-    const shown = bookings.filter((b) => {
+    shown = bookings.filter((b) => {
       if (evSel.value && b.title !== evSel.value) return false;
       if (stSel.value && b.status !== stSel.value) return false;
+      const day = ymd(b.start, G.timezone);
+      if (from.value && day < from.value) return false;
+      if (to.value && day > to.value) return false;
       if (!words.length) return true;
       const text = norm([b.name, b.email, b.title, ...b.answers.map((a) => a.value)].join(' '));
       const digits = text.replace(/\D/g, '');
@@ -432,6 +452,7 @@ function panelReservas() {
       return words.every((w) => text.includes(w) || (/\d/.test(w) && digits.includes(w.replace(/\D/g, ''))));
     });
     count.textContent = bookings.length ? `${shown.length} de ${bookings.length} reservas` : '';
+    exportBtn.disabled = !shown.length;
     if (!bookings.length) return list.replaceChildren(el('p', { class: 'muted' }, scopeSel.value ? 'Todavía no hay reservas.' : 'Todavía no hay reservas próximas.'));
     if (!shown.length) return list.replaceChildren(el('p', { class: 'muted' }, 'Ninguna reserva coincide con la búsqueda.'));
     list.replaceChildren(
@@ -456,6 +477,24 @@ function panelReservas() {
     render();
   };
 
+  // Una fecha pasada no está entre las próximas: pasar solo al historial completo.
+  const onDate = () => {
+    const past = [from.value, to.value].some((d) => d && d < ymd(Date.now(), G.timezone));
+    if (past && !scopeSel.value) { scopeSel.value = 'all'; scopeSel.onchange(); } else render();
+  };
+  from.onchange = onDate;
+  to.onchange = onDate;
+  exportBtn.onclick = () => {
+    const labels = [...new Set(shown.flatMap((b) => b.answers.map((a) => a.label)))];
+    download(`reservas-${ymd(Date.now(), G.timezone)}.xlsx`, xlsxBlob([
+      ['Fecha', 'Hora', 'Evento', 'Estado', 'Nombre', 'Email', ...labels],
+      ...shown.map((b) => [
+        ymd(b.start, G.timezone), hm(b.start, G.timezone), b.title,
+        b.status === 'cancelled' ? 'Cancelada' : 'Confirmada', b.name, b.email,
+        ...labels.map((l) => b.answers.find((a) => a.label === l)?.value ?? ''),
+      ]),
+    ], 'Reservas'));
+  };
   q.oninput = render;
   evSel.onchange = render;
   stSel.onchange = render;

@@ -134,6 +134,7 @@ label.check input { margin-top: 4px; }
 .phone.invalid input { border-color: var(--danger); }
 .req::after { content: ' *'; color: var(--danger); }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+.actions.spread { justify-content: space-between; align-items: center; margin: 0; }
 .details { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 16px 0; }
 .details dt { color: var(--muted); }
 .details dd { margin: 0; white-space: pre-wrap; }
